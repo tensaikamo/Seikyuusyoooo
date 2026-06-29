@@ -3,7 +3,7 @@
    日給管理・請求書 — iPhone単一HTML版（依存ゼロ）
    ネイビー×白 / IndexedDB / A4 2ページPDF
    ============================================================= */
-const APP_VERSION='1.0.1';
+const APP_VERSION='1.0.2';
 
 /* ---------- HTML escape ---------- */
 function esc(s){return String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
@@ -326,8 +326,10 @@ function makeInvoice(empId){
   const period=billingPeriod(billY,billM,s.closingDay);
   const rep=periodReport(emp,period.start,period.end);
   if(rep.grandTotal<=0){toast('⚠️ データがありません');return;}
-  const html=buildInvoiceHTML([{emp,rep}],period,false);
-  printHTML(html);
+  showPreview(
+    buildInvoiceHTML([{emp,rep}],period,false,'screen'),
+    buildInvoiceHTML([{emp,rep}],period,false,'print')
+  );
 }
 window.makeInvoice=makeInvoice;
 
@@ -336,34 +338,27 @@ $('batch-pdf-btn').addEventListener('click',()=>{
   const period=billingPeriod(billY,billM,s.closingDay);
   const reports=STATE.employees.map(e=>({emp:e,rep:periodReport(e,period.start,period.end)})).filter(x=>x.rep.grandTotal>0);
   if(!reports.length){toast('⚠️ データがありません');return;}
-  const html=buildInvoiceHTML(reports,period,true);
-  printHTML(html);
+  showPreview(
+    buildInvoiceHTML(reports,period,true,'screen'),
+    buildInvoiceHTML(reports,period,true,'print')
+  );
 });
 
-function printHTML(innerHTML){
-  // 画面内に全画面プレビューを表示（ホーム画面PWAでも確実に動く）
-  $('pv-scroll').innerHTML=innerHTML;
-  $('print-root').innerHTML=innerHTML; // 「保存・印刷」用に原寸も保持
+function showPreview(screenHTML,printHTML){
+  $('pv-scroll').innerHTML=screenHTML;   // 画面用（幅フィット）
+  $('print-root').innerHTML=printHTML;   // 印刷用（A4原寸）
   $('pv-overlay').classList.add('show');
-  fitPreview();
+  $('pv-scroll').scrollTop=0;
 }
-function fitPreview(){
-  const scroll=$('pv-scroll');
-  const pages=scroll.querySelectorAll('.page');
-  if(!pages.length)return;
-  const mmToPx=793.7/210;       // 210mm ≒ 793.7px
-  const pageW=210*mmToPx;
-  const avail=Math.min(window.innerWidth-24,760);
-  const scale=Math.min(avail/pageW,1);
-  pages.forEach(p=>{ p.style.zoom=scale; });
-}
-window.addEventListener('resize',()=>{if($('pv-overlay').classList.contains('show'))fitPreview();});
+window.addEventListener('resize',()=>{});
 $('pv-close').addEventListener('click',()=>$('pv-overlay').classList.remove('show'));
 $('pv-print').addEventListener('click',()=>{setTimeout(()=>{window.print();},60);});
 
-/* A4 2ページ請求書HTML（ネイビー×白・帳票風） */
-function buildInvoiceHTML(reports,period,batch){
+/* A4 2ページ請求書HTML（ネイビー×白・帳票風）
+   cssMode: 'print'(A4原寸) または 'screen'(画面幅フィット) */
+function buildInvoiceHTML(reports,period,batch,cssMode){
   const s=STATE.settings;
+  const css=(cssMode==='screen')?SCREEN_CSS:PRINT_CSS;
   const issueDate=fmtDateJ(ymd(new Date().getFullYear(),new Date().getMonth()+1,new Date().getDate()));
   const invNo=batch?`${billY}-${pad2(billM)}-ALL`:`${billY}-${pad2(billM)}-${(reports[0].emp.id).replace(/[^0-9]/g,'').slice(0,3).padStart(3,'0')||'001'}`;
 
@@ -372,7 +367,6 @@ function buildInvoiceHTML(reports,period,batch){
   const total=subtotal+tax;
 
   const issuer=s.issuer,client=s.client,bank=s.bank;
-  const css=PRINT_CSS;
 
   // ---- 1ページ目 ----
   const titleSub=batch?`まとめ請求書（${reports.length}名分）`:`${esc(reports[0].emp.name)} 様分`;
@@ -508,6 +502,46 @@ tr:nth-child(even) td{background:#f7f8fc;}
 table.detail th{font-size:8pt;padding:2mm;}
 table.detail td{font-size:8pt;padding:1.6mm 2mm;}
 @page{size:A4;margin:0;}
+`;
+
+/* 画面プレビュー用CSS（A4固定をやめ、画面幅にフィット） */
+const SCREEN_CSS=`
+#pv-scroll *{margin:0;padding:0;box-sizing:border-box;}
+#pv-scroll{font-family:'Hiragino Kaku Gothic ProN','Hiragino Sans','Meiryo',sans-serif;color:#1a1a1a;}
+.page{width:100%;max-width:760px;min-height:auto;background:#fff;border-radius:6px;padding:22px 18px;box-shadow:0 6px 24px rgba(0,0,0,.35);}
+.p1-top{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;margin-bottom:14px;}
+.p1-title{font-size:22px;font-weight:bold;letter-spacing:5px;color:#1a2744;}
+.p1-meta{font-size:11px;color:#555;margin-top:5px;line-height:1.7;}
+.p1-issuer{text-align:right;}
+.p1-issuer-name{font-size:15px;font-weight:bold;color:#1a2744;}
+.p1-issuer-detail{font-size:10px;color:#555;margin-top:3px;line-height:1.6;}
+.divider{border:none;border-top:2px solid #1a2744;margin:10px 0 14px;}
+.client-name{font-size:18px;font-weight:bold;color:#1a2744;margin-bottom:4px;}
+.client-detail{font-size:11px;color:#555;line-height:1.6;}
+.subject{font-size:12px;color:#333;padding:9px 0;border-bottom:1px solid #ddd;margin:10px 0 16px;}
+.total-box{background:#1a2744;color:#fff;border-radius:8px;padding:18px;margin-bottom:16px;text-align:center;}
+.total-label{font-size:11px;opacity:.82;margin-bottom:6px;letter-spacing:1px;}
+.total-amount{font-size:34px;font-weight:bold;letter-spacing:1px;}
+.total-sub{font-size:11px;opacity:.85;margin-top:6px;}
+.total-sub span{margin:0 8px;}
+table{width:100%;border-collapse:collapse;margin-bottom:16px;}
+th{background:#1a2744;color:#fff;padding:8px 7px;font-size:11px;text-align:left;}
+td{padding:7px;font-size:11px;border-bottom:1px solid #e8eaf0;}
+tr:nth-child(even) td{background:#f7f8fc;}
+.subtotal-row td{background:#eef2ff!important;font-weight:bold;color:#1a2744;}
+.total-row td{background:#1a2744!important;color:#fff;font-weight:bold;font-size:12px;}
+.r{text-align:right;}.c{text-align:center;}.bold{font-weight:bold;}
+.bank-box{border:1px solid #d1d5db;border-radius:6px;padding:12px;background:#f9fafb;margin-bottom:14px;}
+.bank-title{font-size:11px;font-weight:bold;color:#1a2744;margin-bottom:6px;padding-left:7px;border-left:3px solid #f59e0b;}
+.bank-row{font-size:11px;color:#333;margin-top:3px;}
+.p1-foot{font-size:10px;color:#888;border-top:1px solid #eee;padding-top:8px;margin-top:8px;}
+.p2-title{font-size:18px;font-weight:bold;color:#1a2744;margin-bottom:14px;border-bottom:2px solid #1a2744;padding-bottom:7px;}
+.p2-title span{font-size:12px;color:#666;font-weight:normal;}
+.emp-block{margin-bottom:20px;}
+.emp-block-title{font-size:14px;font-weight:bold;color:#1a2744;margin-bottom:7px;padding-left:8px;border-left:4px solid #f59e0b;}
+.emp-block-title span{font-size:11px;color:#666;font-weight:normal;}
+table.detail th{font-size:10px;padding:6px;}
+table.detail td{font-size:10px;padding:5px 6px;}
 `;
 
 /* ===== 設定タブ ===== */
