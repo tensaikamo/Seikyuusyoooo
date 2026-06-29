@@ -1,0 +1,350 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>日給管理・請求書</title>
+<meta name="description" content="日給制の勤怠管理と請求書発行。インボイス対応・A4 2ページPDF。">
+<link rel="manifest" href="manifest.json">
+<meta name="theme-color" content="#1a2744">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="請求書">
+<link rel="apple-touch-icon" href="icon-180.png">
+<style>
+:root{
+  --navy:#1a2744;
+  --navy-2:#26375c;
+  --amber:#f59e0b;
+  --amber-d:#d97e06;
+  --bg:#f1efe9;
+  --surface:#ffffff;
+  --line:#e2e0d8;
+  --line-2:#d4d2c8;
+  --ink:#1c1c1e;
+  --sub:#6b6f76;
+  --mut:#9a9ca2;
+  --ok:#16a34a;
+  --danger:#dc2626;
+  --r:12px;
+  --sb:env(safe-area-inset-bottom,0px);
+  --st:env(safe-area-inset-top,0px);
+  --snap:cubic-bezier(.34,1.4,.55,1);
+}
+*{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent;}
+html{height:100%;}
+body{
+  min-height:100dvh;height:100dvh;background:var(--bg);color:var(--ink);
+  font-family:'Hiragino Kaku Gothic ProN','Hiragino Sans','Meiryo','Yu Gothic',-apple-system,sans-serif;
+  display:flex;flex-direction:column;overflow:hidden;-webkit-text-size-adjust:100%;line-height:1.5;
+}
+input,select,textarea,button{font-family:inherit;font-size:16px;color:var(--ink);}
+
+/* ===== SPLASH ===== */
+#splash{position:fixed;inset:0;z-index:9999;background:var(--navy);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;transition:opacity .35s;}
+#splash .mk{width:62px;height:78px;border:3px solid #fff;border-radius:6px;position:relative;background:var(--navy);}
+#splash .mk::before{content:'';position:absolute;top:10px;left:10px;right:10px;height:3px;background:var(--amber);box-shadow:0 10px 0 rgba(255,255,255,.85),0 20px 0 rgba(255,255,255,.85);}
+#splash .nm{color:#fff;font-size:1.3rem;font-weight:800;letter-spacing:.12em;}
+#splash .sb{font-size:.66rem;letter-spacing:.24em;color:rgba(255,255,255,.5);}
+#splash.hide{opacity:0;pointer-events:none;}
+
+/* ===== HEADER ===== */
+.ph{
+  background:var(--navy);color:#fff;flex-shrink:0;
+  padding:calc(var(--st) + 13px) 18px 13px;
+  display:flex;align-items:center;justify-content:space-between;
+}
+.ph-title{display:flex;flex-direction:column;gap:1px;}
+.ph-name{font-size:1.05rem;font-weight:800;letter-spacing:.04em;}
+.ph-sub{font-size:.6rem;letter-spacing:.16em;color:rgba(255,255,255,.55);text-transform:uppercase;}
+.ph-month{
+  background:rgba(255,255,255,.12);border:1px solid rgba(255,255,255,.2);border-radius:20px;
+  padding:6px 14px;font-size:.82rem;font-weight:700;letter-spacing:.02em;
+  display:flex;align-items:center;gap:8px;
+}
+.ph-month button{background:none;border:none;color:#fff;font-size:1.1rem;cursor:pointer;line-height:1;padding:0 2px;}
+
+/* ===== PAGES ===== */
+.pages{flex:1;position:relative;overflow:hidden;}
+.page{position:absolute;inset:0;overflow-y:auto;-webkit-overflow-scrolling:touch;display:none;}
+.page.active{display:block;animation:fade .25s ease;}
+@keyframes fade{from{opacity:0;transform:translateY(5px);}to{opacity:1;transform:none;}}
+.sc{padding:14px 13px calc(20px + var(--sb));}
+
+/* ===== TAB BAR ===== */
+.tabbar{display:flex;background:var(--surface);border-top:1px solid var(--line);padding-bottom:var(--sb);flex-shrink:0;}
+.tb{flex:1;min-height:54px;background:none;border:none;color:var(--mut);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;padding:8px 0 6px;cursor:pointer;transition:color .15s;}
+.tb .ic{font-size:1.2rem;line-height:1;}
+.tb span{font-size:.62rem;font-weight:600;letter-spacing:.03em;}
+.tb.active{color:var(--navy);}
+.tb.active .ic{transform:translateY(-1px);}
+
+/* ===== CARDS / COMMON ===== */
+.card{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);padding:15px;margin-bottom:12px;}
+.card-t{font-size:.66rem;font-weight:800;letter-spacing:.12em;color:var(--mut);text-transform:uppercase;margin-bottom:12px;display:flex;align-items:center;gap:7px;}
+.card-t::before{content:'';width:3px;height:13px;background:var(--amber);border-radius:2px;}
+label.fl{display:block;font-size:.72rem;font-weight:700;color:var(--sub);margin-bottom:6px;}
+input[type=text],input[type=number],input[type=tel],input[type=date],select,textarea{
+  width:100%;padding:11px 13px;background:#fafaf8;border:1px solid var(--line-2);border-radius:10px;
+  outline:none;transition:border-color .15s,background .15s;min-height:46px;-webkit-appearance:none;appearance:none;
+}
+input:focus,select:focus,textarea:focus{border-color:var(--navy);background:#fff;}
+input::placeholder{color:var(--mut);}
+select{background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='11' height='7'%3E%3Cpath d='M0 0l5.5 7L11 0z' fill='%236b6f76'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:right 13px center;padding-right:34px;}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:10px;}
+.field{margin-bottom:12px;}
+.field:last-child{margin-bottom:0;}
+
+.btn{min-height:48px;border:none;border-radius:11px;font-weight:700;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:8px;transition:transform .12s var(--snap),opacity .15s;width:100%;}
+.btn:active{transform:scale(.985);}
+.btn-navy{background:var(--navy);color:#fff;}
+.btn-amber{background:var(--amber);color:#3a2606;}
+.btn-ghost{background:var(--surface);border:1px solid var(--line-2);color:var(--ink);}
+.btn-danger{background:transparent;border:1px solid rgba(220,38,38,.4);color:var(--danger);}
+.btn-sm{min-height:40px;font-size:.84rem;padding:0 14px;}
+
+/* ===== EMPLOYEE SELECTOR ===== */
+.emp-row{display:flex;gap:8px;overflow-x:auto;padding:2px 0 8px;-webkit-overflow-scrolling:touch;}
+.emp-chip{flex-shrink:0;padding:9px 16px;background:var(--surface);border:1px solid var(--line-2);border-radius:11px;font-size:.86rem;font-weight:700;color:var(--sub);cursor:pointer;transition:all .15s;white-space:nowrap;min-height:44px;display:flex;align-items:center;}
+.emp-chip.sel{background:var(--navy);border-color:var(--navy);color:#fff;}
+.emp-chip.add{color:var(--navy);border-style:dashed;}
+
+/* ===== ATTENDANCE ===== */
+.att-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;}
+.att-emp{font-size:.95rem;font-weight:800;}
+.att-meta{font-size:.72rem;color:var(--sub);margin-top:2px;}
+.day-list{display:flex;flex-direction:column;gap:6px;}
+.day{
+  display:grid;grid-template-columns:54px 1fr;gap:10px;align-items:center;
+  background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:9px 11px;
+}
+.day.work{border-color:var(--navy-2);background:#fafbfd;}
+.day.weekend .dnum{color:var(--danger);}
+.day.sat .dnum{color:#2563eb;}
+.dcell-l{text-align:center;}
+.dnum{font-size:1rem;font-weight:800;line-height:1.1;}
+.ddow{font-size:.64rem;color:var(--mut);}
+.dcell-r{display:flex;flex-direction:column;gap:7px;}
+.att-btns{display:flex;gap:5px;flex-wrap:wrap;}
+.att-b{min-width:38px;min-height:34px;padding:0 9px;background:#f3f2ee;border:1px solid var(--line-2);border-radius:8px;font-size:.8rem;font-weight:700;color:var(--sub);cursor:pointer;transition:all .12s;}
+.att-b.sel{background:var(--navy);border-color:var(--navy);color:#fff;}
+.att-sub{display:flex;gap:8px;}
+.att-mini{flex:1;display:flex;align-items:center;gap:5px;}
+.att-mini label{font-size:.64rem;color:var(--mut);white-space:nowrap;}
+.att-mini input{padding:7px 9px;min-height:38px;font-size:14px;text-align:right;}
+.day-total{font-size:.74rem;font-weight:700;color:var(--navy);text-align:right;}
+
+/* running total bar */
+.runbar{
+  position:sticky;bottom:0;background:var(--navy);color:#fff;border-radius:12px;
+  padding:13px 16px;margin-top:12px;display:flex;align-items:center;justify-content:space-between;
+}
+.runbar .rl{font-size:.7rem;opacity:.8;letter-spacing:.08em;}
+.runbar .rv{font-size:1.3rem;font-weight:800;}
+
+/* ===== SUMMARY / 請求 ===== */
+.period-row{display:flex;align-items:center;justify-content:space-between;background:var(--surface);border:1px solid var(--line);border-radius:var(--r);padding:11px 14px;margin-bottom:12px;}
+.period-nav{min-width:42px;min-height:42px;background:#f3f2ee;border:1px solid var(--line-2);border-radius:9px;color:var(--sub);font-size:1.25rem;cursor:pointer;}
+.period-lbl{text-align:center;}
+.period-main{font-size:.95rem;font-weight:800;}
+.period-sub{font-size:.68rem;color:var(--sub);margin-top:2px;}
+.sum-emp{background:var(--surface);border:1px solid var(--line);border-radius:11px;padding:13px 14px;margin-bottom:9px;}
+.sum-emp-top{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;}
+.sum-emp-name{font-size:.92rem;font-weight:800;}
+.sum-emp-total{font-size:1.05rem;font-weight:800;color:var(--navy);}
+.sum-emp-detail{display:flex;flex-wrap:wrap;gap:4px 14px;font-size:.72rem;color:var(--sub);}
+.sum-emp-btn{margin-top:10px;}
+.grand{background:var(--navy);color:#fff;border-radius:var(--r);padding:18px;margin-bottom:12px;}
+.grand-l{font-size:.68rem;opacity:.75;letter-spacing:.1em;margin-bottom:8px;}
+.grand-v{font-size:2rem;font-weight:800;letter-spacing:.01em;}
+.grand-sub{font-size:.72rem;opacity:.7;margin-top:6px;}
+
+/* ===== SETTINGS ===== */
+.editlist{display:flex;flex-direction:column;gap:7px;margin-bottom:10px;}
+.edititem{display:flex;align-items:center;gap:8px;background:#fafaf8;border:1px solid var(--line);border-radius:9px;padding:9px 12px;}
+.edititem .ei-name{flex:1;font-size:.86rem;font-weight:700;}
+.edititem .ei-wage{font-size:.78rem;color:var(--sub);}
+.edititem button{min-width:32px;min-height:32px;background:none;border:none;color:var(--mut);cursor:pointer;font-size:.95rem;}
+.data-btns{display:flex;flex-direction:column;gap:9px;}
+.verrow{display:flex;align-items:center;justify-content:space-between;font-size:.8rem;color:var(--sub);}
+
+/* ===== MODAL ===== */
+.modal-bg{position:fixed;inset:0;background:rgba(20,25,40,.55);z-index:500;display:none;align-items:flex-end;justify-content:center;padding:0;}
+.modal-bg.show{display:flex;animation:fade .2s ease;}
+.modal{background:var(--surface);width:100%;max-width:560px;border-radius:18px 18px 0 0;padding:20px 18px calc(20px + var(--sb));max-height:88vh;overflow-y:auto;animation:slideup .28s var(--snap);}
+@keyframes slideup{from{transform:translateY(40px);opacity:.6;}to{transform:none;opacity:1;}}
+.modal-h{display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;}
+.modal-title{font-size:1.05rem;font-weight:800;}
+.modal-close{min-width:36px;min-height:36px;background:#f3f2ee;border:none;border-radius:9px;font-size:1rem;color:var(--sub);cursor:pointer;}
+
+/* ===== TOAST ===== */
+.toast{position:fixed;left:50%;top:calc(var(--st) + 12px);transform:translateX(-50%) translateY(-10px);background:var(--navy);color:#fff;padding:10px 20px;border-radius:22px;font-size:.84rem;font-weight:600;opacity:0;pointer-events:none;transition:opacity .25s,transform .25s var(--snap);z-index:10000;white-space:nowrap;max-width:92vw;box-shadow:0 8px 24px rgba(0,0,0,.25);}
+.toast.show{opacity:1;transform:translateX(-50%) translateY(0);}
+
+.empty{text-align:center;padding:40px 20px;color:var(--mut);font-size:.86rem;line-height:2;}
+
+@media (prefers-reduced-motion: reduce){*,*::before,*::after{animation-duration:.01ms!important;transition-duration:.01ms!important;}}
+
+/* ===== PRINT (A4 invoice) — 画面では隠す ===== */
+#print-root{display:none;}
+@media print{
+  body{overflow:visible;height:auto;background:#fff;}
+  body > *:not(#print-root){display:none!important;}
+  #print-root{display:block!important;}
+}
+</style>
+</head>
+<body>
+
+<div id="splash">
+  <div class="mk"></div>
+  <div class="nm">日給管理・請求書</div>
+  <div class="sb">SALARY & INVOICE</div>
+</div>
+
+<!-- HEADER -->
+<header class="ph">
+  <div class="ph-title">
+    <div class="ph-name" id="ph-name">日給管理</div>
+    <div class="ph-sub" id="ph-sub">ATTENDANCE</div>
+  </div>
+  <div class="ph-month" id="ph-month">
+    <button id="hm-prev" type="button">‹</button>
+    <span id="hm-label">—</span>
+    <button id="hm-next" type="button">›</button>
+  </div>
+</header>
+
+<div class="pages">
+
+  <!-- ===== 勤怠入力 ===== -->
+  <section class="page active" id="page-att">
+    <div class="sc">
+      <div class="emp-row" id="emp-row"></div>
+      <div id="att-body"></div>
+    </div>
+  </section>
+
+  <!-- ===== 請求 ===== -->
+  <section class="page" id="page-bill">
+    <div class="sc">
+      <div class="period-row">
+        <button class="period-nav" id="pd-prev" type="button">‹</button>
+        <div class="period-lbl">
+          <div class="period-main" id="pd-main">—</div>
+          <div class="period-sub" id="pd-sub">締め期間</div>
+        </div>
+        <button class="period-nav" id="pd-next" type="button">›</button>
+      </div>
+      <div class="grand">
+        <div class="grand-l">請求合計（税込）</div>
+        <div class="grand-v" id="grand-v">¥ —</div>
+        <div class="grand-sub" id="grand-sub">全従業員の合計</div>
+      </div>
+      <div id="sum-list"></div>
+      <button class="btn btn-amber" id="batch-pdf-btn" type="button" style="margin-top:4px;">📄 まとめ請求書をPDFで作る</button>
+    </div>
+  </section>
+
+  <!-- ===== 設定 ===== -->
+  <section class="page" id="page-set">
+    <div class="sc">
+      <!-- 従業員 -->
+      <div class="card">
+        <div class="card-t">従業員</div>
+        <div class="editlist" id="set-emp-list"></div>
+        <button class="btn btn-ghost btn-sm" id="set-add-emp" type="button">＋ 従業員を追加</button>
+      </div>
+      <!-- 自社情報 -->
+      <div class="card">
+        <div class="card-t">自社情報（発行者）</div>
+        <div class="field"><label class="fl">会社名・屋号</label><input type="text" id="iss-name" placeholder="例：山田工業"></div>
+        <div class="grid2 field">
+          <div><label class="fl">郵便番号</label><input type="text" id="iss-zip" inputmode="numeric" placeholder="000-0000"></div>
+          <div><label class="fl">電話番号</label><input type="tel" id="iss-tel" inputmode="tel" placeholder="090-0000-0000"></div>
+        </div>
+        <div class="field"><label class="fl">住所</label><input type="text" id="iss-addr" placeholder="例：北海道札幌市…"></div>
+        <div class="field"><label class="fl">インボイス登録番号</label><input type="text" id="iss-invno" placeholder="T1234567890123"></div>
+      </div>
+      <!-- 請求先 -->
+      <div class="card">
+        <div class="card-t">請求先（元請け）</div>
+        <div class="field"><label class="fl">会社名</label><input type="text" id="cli-name" placeholder="例：◯◯建設 株式会社"></div>
+        <div class="grid2 field">
+          <div><label class="fl">郵便番号</label><input type="text" id="cli-zip" inputmode="numeric" placeholder="000-0000"></div>
+          <div><label class="fl">担当者名（任意）</label><input type="text" id="cli-contact" placeholder="例：佐藤様"></div>
+        </div>
+        <div class="field"><label class="fl">住所</label><input type="text" id="cli-addr" placeholder="例：北海道…"></div>
+      </div>
+      <!-- 振込先 -->
+      <div class="card">
+        <div class="card-t">振込先（任意）</div>
+        <div class="grid2 field">
+          <div><label class="fl">銀行名</label><input type="text" id="bk-bank" placeholder="◯◯銀行"></div>
+          <div><label class="fl">支店名</label><input type="text" id="bk-branch" placeholder="◯◯支店"></div>
+        </div>
+        <div class="grid2 field">
+          <div><label class="fl">口座種別</label><select id="bk-type"><option>普通</option><option>当座</option></select></div>
+          <div><label class="fl">口座番号</label><input type="text" id="bk-num" inputmode="numeric" placeholder="1234567"></div>
+        </div>
+        <div class="field"><label class="fl">口座名義</label><input type="text" id="bk-holder" placeholder="ヤマダ タロウ"></div>
+      </div>
+      <!-- 請求条件 -->
+      <div class="card">
+        <div class="card-t">請求条件</div>
+        <div class="grid2 field">
+          <div><label class="fl">消費税率</label><select id="set-tax"><option value="10">10%</option><option value="8">8%</option><option value="0">なし（0%）</option></select></div>
+          <div><label class="fl">締め日</label><select id="set-closing"></select></div>
+        </div>
+        <div class="field"><label class="fl">車代の初期値（円）</label><input type="number" id="set-transport" inputmode="numeric" placeholder="1000"></div>
+      </div>
+      <!-- データ -->
+      <div class="card">
+        <div class="card-t">データ管理</div>
+        <div class="data-btns">
+          <button class="btn btn-ghost btn-sm" id="export-btn" type="button">📁 バックアップをファイルに保存</button>
+          <button class="btn btn-ghost btn-sm" id="import-btn" type="button">📥 バックアップから復元</button>
+          <button class="btn btn-danger btn-sm" id="reset-btn" type="button">全データをリセット</button>
+        </div>
+      </div>
+      <!-- 情報 -->
+      <div class="card">
+        <div class="card-t">アプリ情報</div>
+        <div class="verrow"><span>バージョン <b id="ver">1.0.0</b></span><button class="btn btn-ghost btn-sm" id="reload-btn" type="button" style="width:auto;">最新に更新</button></div>
+      </div>
+    </div>
+  </section>
+
+</div>
+
+<!-- TAB BAR -->
+<nav class="tabbar">
+  <button class="tb active" id="tb-att" type="button"><span class="ic">📋</span><span>勤怠</span></button>
+  <button class="tb" id="tb-bill" type="button"><span class="ic">📄</span><span>請求</span></button>
+  <button class="tb" id="tb-set" type="button"><span class="ic">⚙️</span><span>設定</span></button>
+</nav>
+
+<!-- EMPLOYEE MODAL -->
+<div class="modal-bg" id="emp-modal">
+  <div class="modal">
+    <div class="modal-h">
+      <div class="modal-title" id="emp-modal-title">従業員を追加</div>
+      <button class="modal-close" id="emp-modal-close" type="button">✕</button>
+    </div>
+    <div class="field"><label class="fl">名前</label><input type="text" id="emp-name" placeholder="例：田中"></div>
+    <div class="field"><label class="fl">日給（円）</label><input type="number" id="emp-wage" inputmode="numeric" placeholder="例：18000"></div>
+    <div id="emp-ot-hint" style="font-size:.74rem;color:var(--sub);margin-bottom:14px;"></div>
+    <button class="btn btn-navy" id="emp-save" type="button">保存</button>
+    <button class="btn btn-danger btn-sm" id="emp-delete" type="button" style="margin-top:9px;display:none;">この従業員を削除</button>
+  </div>
+</div>
+
+<!-- PRINT ROOT -->
+<div id="print-root"></div>
+
+<div class="toast" id="toast"></div>
+
+<script src="app.js"></script>
+</body>
+</html>
