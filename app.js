@@ -3,7 +3,7 @@
    日給管理・請求書 — iPhone単一HTML版（依存ゼロ）
    ネイビー×白 / IndexedDB / A4 2ページPDF
    ============================================================= */
-const APP_VERSION='1.0.2';
+const APP_VERSION='1.0.3';
 
 /* ---------- HTML escape ---------- */
 function esc(s){return String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
@@ -350,7 +350,6 @@ function showPreview(screenHTML,printHTML){
   $('pv-overlay').classList.add('show');
   $('pv-scroll').scrollTop=0;
 }
-window.addEventListener('resize',()=>{});
 $('pv-close').addEventListener('click',()=>$('pv-overlay').classList.remove('show'));
 $('pv-print').addEventListener('click',()=>{setTimeout(()=>{window.print();},60);});
 
@@ -372,27 +371,27 @@ function buildInvoiceHTML(reports,period,batch,cssMode){
   const titleSub=batch?`まとめ請求書（${reports.length}名分）`:`${esc(reports[0].emp.name)} 様分`;
   const empRows=reports.map(r=>`
     <tr><td>${esc(r.emp.name)}</td>
-    <td class="r">${r.rep.totalAttendance}日</td>
-    <td class="r">${yen(r.rep.totalDailyWage)}</td>
-    <td class="r">${yen(r.rep.totalOvertimePay)}</td>
-    <td class="r">${yen(r.rep.totalTransportFee)}</td>
-    <td class="r bold">${yen(r.rep.grandTotal)}</td></tr>`).join('');
+    <td class="inv-r">${r.rep.totalAttendance}日</td>
+    <td class="inv-r">${yen(r.rep.totalDailyWage)}</td>
+    <td class="inv-r">${yen(r.rep.totalOvertimePay)}</td>
+    <td class="inv-r">${yen(r.rep.totalTransportFee)}</td>
+    <td class="inv-r inv-bold">${yen(r.rep.grandTotal)}</td></tr>`).join('');
 
   const bankBlock=(bank.bankName||bank.accountNumber)?`
-    <div class="bank-box"><div class="bank-title">お振込先</div>
-      <div class="bank-row">${esc(bank.bankName)} ${esc(bank.branchName)} ${esc(bank.accountType)} ${esc(bank.accountNumber)}</div>
-      <div class="bank-row">名義：${esc(bank.accountHolder)}</div>
+    <div class="inv-bank-box"><div class="inv-bank-title">お振込先</div>
+      <div class="inv-bank-row">${esc(bank.bankName)} ${esc(bank.branchName)} ${esc(bank.accountType)} ${esc(bank.accountNumber)}</div>
+      <div class="inv-bank-row">名義：${esc(bank.accountHolder)}</div>
     </div>`:'';
 
-  const page1=`<div class="page">
-    <div class="p1-top">
+  const page1=`<div class="inv-page">
+    <div class="inv-p1-top">
       <div>
-        <div class="p1-title">請　求　書</div>
-        <div class="p1-meta">請求番号：${invNo}<br>発行日：${issueDate}<br>対象期間：${period.label}</div>
+        <div class="inv-p1-title">請　求　書</div>
+        <div class="inv-p1-meta">請求番号：${invNo}<br>発行日：${issueDate}<br>対象期間：${period.label}</div>
       </div>
-      <div class="p1-issuer">
-        <div class="p1-issuer-name">${esc(issuer.companyName||'（自社名未設定）')}</div>
-        <div class="p1-issuer-detail">
+      <div class="inv-p1-issuer">
+        <div class="inv-p1-issuer-name">${esc(issuer.companyName||'（自社名未設定）')}</div>
+        <div class="inv-p1-issuer-detail">
           ${issuer.postalCode?'〒'+esc(issuer.postalCode)+'<br>':''}
           ${esc(issuer.address)}<br>
           ${issuer.phone?'TEL：'+esc(issuer.phone)+'<br>':''}
@@ -400,32 +399,32 @@ function buildInvoiceHTML(reports,period,batch,cssMode){
         </div>
       </div>
     </div>
-    <hr class="divider">
-    <div class="client-name">${esc(client.companyName||'（請求先未設定）')}　御中</div>
-    <div class="client-detail">
+    <hr class="inv-divider">
+    <div class="inv-client-name">${esc(client.companyName||'（請求先未設定）')}　御中</div>
+    <div class="inv-client-detail">
       ${client.postalCode?'〒'+esc(client.postalCode)+'　':''}${esc(client.address)}
       ${client.contactName?'<br>ご担当：'+esc(client.contactName)+' 様':''}
     </div>
-    <div class="subject">件名：${period.periodLabel} 人工代（${titleSub}）</div>
+    <div class="inv-subject">件名：${period.periodLabel} 人工代（${titleSub}）</div>
 
-    <div class="total-box">
-      <div class="total-label">ご請求金額（税込）</div>
-      <div class="total-amount">${yen(total)}</div>
-      <div class="total-sub"><span>税抜 ${yen(subtotal)}</span><span>消費税(${s.taxRate}%) ${yen(tax)}</span></div>
+    <div class="inv-total-box">
+      <div class="inv-total-label">ご請求金額（税込）</div>
+      <div class="inv-total-amount">${yen(total)}</div>
+      <div class="inv-total-sub"><span>税抜 ${yen(subtotal)}</span><span>消費税(${s.taxRate}%) ${yen(tax)}</span></div>
     </div>
 
     <table>
-      <thead><tr><th>氏名</th><th class="r">出勤</th><th class="r">人工代</th><th class="r">残業</th><th class="r">車代</th><th class="r">小計</th></tr></thead>
+      <thead><tr><th>氏名</th><th class="inv-r">出勤</th><th class="inv-r">人工代</th><th class="inv-r">残業</th><th class="inv-r">車代</th><th class="inv-r">小計</th></tr></thead>
       <tbody>
         ${empRows}
-        <tr class="subtotal-row"><td>小計（税抜）</td><td></td><td></td><td></td><td></td><td class="r">${yen(subtotal)}</td></tr>
-        <tr class="subtotal-row"><td>消費税（${s.taxRate}%）</td><td></td><td></td><td></td><td></td><td class="r">${yen(tax)}</td></tr>
-        <tr class="total-row"><td>合計（税込）</td><td></td><td></td><td></td><td></td><td class="r">${yen(total)}</td></tr>
+        <tr class="inv-subtotal-row"><td>小計（税抜）</td><td></td><td></td><td></td><td></td><td class="inv-r">${yen(subtotal)}</td></tr>
+        <tr class="inv-subtotal-row"><td>消費税（${s.taxRate}%）</td><td></td><td></td><td></td><td></td><td class="inv-r">${yen(tax)}</td></tr>
+        <tr class="inv-total-row"><td>合計（税込）</td><td></td><td></td><td></td><td></td><td class="inv-r">${yen(total)}</td></tr>
       </tbody>
     </table>
 
     ${bankBlock}
-    <div class="p1-foot">登録番号 ${esc(issuer.invoiceNumber||'未設定')} ／ 適格請求書発行事業者</div>
+    <div class="inv-p1-foot">登録番号 ${esc(issuer.invoiceNumber||'未設定')} ／ 適格請求書発行事業者</div>
   </div>`;
 
   // ---- 2ページ目：出面の内訳（従業員ごと）----
@@ -439,26 +438,26 @@ function buildInvoiceHTML(reports,period,batch,cssMode){
       const d=new Date(ds+'T00:00:00');
       return `<tr>
         <td>${d.getMonth()+1}/${d.getDate()}(${WEEK[d.getDay()]})</td>
-        <td class="c">${rec.attendance}</td>
-        <td class="r">${yen(t.wage)}</td>
-        <td class="c">${rec.overtimeHours||0}h</td>
-        <td class="r">${yen(t.ot)}</td>
-        <td class="r">${yen(t.tr)}</td>
-        <td class="r bold">${yen(t.total)}</td>
+        <td class="inv-c">${rec.attendance}</td>
+        <td class="inv-r">${yen(t.wage)}</td>
+        <td class="inv-c">${rec.overtimeHours||0}h</td>
+        <td class="inv-r">${yen(t.ot)}</td>
+        <td class="inv-r">${yen(t.tr)}</td>
+        <td class="inv-r inv-bold">${yen(t.total)}</td>
       </tr>`;
     }).join('');
     page2inner+=`
-      <div class="emp-block">
-        <div class="emp-block-title">${esc(emp.name)}　<span>日給 ${yen(emp.dailyWage)} / 残業 ${yen(Math.round(otRate))}/h</span></div>
-        <table class="detail">
-          <thead><tr><th>日付</th><th class="c">出勤</th><th class="r">人工代</th><th class="c">残業</th><th class="r">残業代</th><th class="r">車代</th><th class="r">計</th></tr></thead>
+      <div class="inv-emp-block">
+        <div class="inv-emp-block-title">${esc(emp.name)}　<span>日給 ${yen(emp.dailyWage)} / 残業 ${yen(Math.round(otRate))}/h</span></div>
+        <table class="inv-detail">
+          <thead><tr><th>日付</th><th class="inv-c">出勤</th><th class="inv-r">人工代</th><th class="inv-c">残業</th><th class="inv-r">残業代</th><th class="inv-r">車代</th><th class="inv-r">計</th></tr></thead>
           <tbody>${rows}
-            <tr class="total-row"><td>合計</td><td class="c">${rep.totalAttendance}</td><td class="r">${yen(rep.totalDailyWage)}</td><td></td><td class="r">${yen(rep.totalOvertimePay)}</td><td class="r">${yen(rep.totalTransportFee)}</td><td class="r">${yen(rep.grandTotal)}</td></tr>
+            <tr class="inv-total-row"><td>合計</td><td class="inv-c">${rep.totalAttendance}</td><td class="inv-r">${yen(rep.totalDailyWage)}</td><td></td><td class="inv-r">${yen(rep.totalOvertimePay)}</td><td class="inv-r">${yen(rep.totalTransportFee)}</td><td class="inv-r">${yen(rep.grandTotal)}</td></tr>
           </tbody>
         </table>
       </div>`;
   });
-  const page2=`<div class="page"><div class="p2-title">出面内訳　<span>${period.label}</span></div>${page2inner}</div>`;
+  const page2=`<div class="inv-page"><div class="inv-p2-title">出面内訳　<span>${period.label}</span></div>${page2inner}</div>`;
 
   return `<style>${css}</style>${page1}${page2}`;
 }
@@ -466,41 +465,41 @@ function buildInvoiceHTML(reports,period,batch,cssMode){
 const PRINT_CSS=`
 #print-root{font-family:'Hiragino Kaku Gothic ProN','Hiragino Sans','Meiryo',sans-serif;color:#1a1a1a;background:#fff;}
 #print-root *{margin:0;padding:0;box-sizing:border-box;}
-.page{width:210mm;min-height:297mm;padding:14mm 15mm 12mm;background:#fff;page-break-after:always;position:relative;}
-.page:last-child{page-break-after:auto;}
-.p1-top{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:5mm;}
-.p1-title{font-size:24pt;font-weight:bold;letter-spacing:6px;color:#1a2744;}
-.p1-meta{font-size:8.5pt;color:#555;margin-top:4px;line-height:1.7;}
-.p1-issuer{text-align:right;}
-.p1-issuer-name{font-size:12pt;font-weight:bold;color:#1a2744;}
-.p1-issuer-detail{font-size:8pt;color:#555;margin-top:3px;line-height:1.6;}
-.divider{border:none;border-top:2px solid #1a2744;margin:3mm 0 4mm;}
-.client-name{font-size:15pt;font-weight:bold;color:#1a2744;margin-bottom:1.5mm;}
-.client-detail{font-size:8.5pt;color:#555;line-height:1.6;}
-.subject{font-size:9.5pt;color:#333;padding:2.5mm 0;border-bottom:1px solid #ddd;margin:3mm 0 5mm;}
-.total-box{background:#1a2744;color:#fff;border-radius:6px;padding:6mm 8mm;margin-bottom:5mm;text-align:center;}
-.total-label{font-size:9pt;opacity:.82;margin-bottom:2mm;letter-spacing:1px;}
-.total-amount{font-size:30pt;font-weight:bold;letter-spacing:2px;}
-.total-sub{font-size:8.5pt;opacity:.8;margin-top:2mm;}
-.total-sub span{margin:0 9px;}
-table{width:100%;border-collapse:collapse;margin-bottom:5mm;}
-th{background:#1a2744;color:#fff;padding:2.5mm 3mm;font-size:8.5pt;text-align:left;}
-td{padding:2mm 3mm;font-size:8.5pt;border-bottom:1px solid #e8eaf0;}
-tr:nth-child(even) td{background:#f7f8fc;}
-.subtotal-row td{background:#eef2ff!important;font-weight:bold;color:#1a2744;}
-.total-row td{background:#1a2744!important;color:#fff;font-weight:bold;font-size:9.5pt;}
-.r{text-align:right;}.c{text-align:center;}.bold{font-weight:bold;}
-.bank-box{border:1px solid #d1d5db;border-radius:4px;padding:3mm 4mm;background:#f9fafb;margin-bottom:4mm;}
-.bank-title{font-size:8.5pt;font-weight:bold;color:#1a2744;margin-bottom:2mm;padding-left:6px;border-left:3px solid #f59e0b;}
-.bank-row{font-size:8.5pt;color:#333;margin-top:1mm;}
-.p1-foot{position:absolute;bottom:10mm;left:15mm;right:15mm;font-size:7.5pt;color:#888;border-top:1px solid #eee;padding-top:2mm;}
-.p2-title{font-size:14pt;font-weight:bold;color:#1a2744;margin-bottom:5mm;border-bottom:2px solid #1a2744;padding-bottom:2mm;}
-.p2-title span{font-size:9pt;color:#666;font-weight:normal;}
-.emp-block{margin-bottom:7mm;}
-.emp-block-title{font-size:10pt;font-weight:bold;color:#1a2744;margin-bottom:2mm;padding-left:7px;border-left:4px solid #f59e0b;}
-.emp-block-title span{font-size:8pt;color:#666;font-weight:normal;}
-table.detail th{font-size:8pt;padding:2mm;}
-table.detail td{font-size:8pt;padding:1.6mm 2mm;}
+.inv-page{width:210mm;min-height:297mm;padding:14mm 15mm 12mm;background:#fff;page-break-after:always;position:relative;}
+.inv-page:last-child{page-break-after:auto;}
+.inv-p1-top{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:5mm;}
+.inv-p1-title{font-size:24pt;font-weight:bold;letter-spacing:6px;color:#1a2744;}
+.inv-p1-meta{font-size:8.5pt;color:#555;margin-top:4px;line-height:1.7;}
+.inv-p1-issuer{text-align:right;}
+.inv-p1-issuer-name{font-size:12pt;font-weight:bold;color:#1a2744;}
+.inv-p1-issuer-detail{font-size:8pt;color:#555;margin-top:3px;line-height:1.6;}
+.inv-divider{border:none;border-top:2px solid #1a2744;margin:3mm 0 4mm;}
+.inv-client-name{font-size:15pt;font-weight:bold;color:#1a2744;margin-bottom:1.5mm;}
+.inv-client-detail{font-size:8.5pt;color:#555;line-height:1.6;}
+.inv-subject{font-size:9.5pt;color:#333;padding:2.5mm 0;border-bottom:1px solid #ddd;margin:3mm 0 5mm;}
+.inv-total-box{background:#1a2744;color:#fff;border-radius:6px;padding:6mm 8mm;margin-bottom:5mm;text-align:center;}
+.inv-total-label{font-size:9pt;opacity:.82;margin-bottom:2mm;letter-spacing:1px;}
+.inv-total-amount{font-size:30pt;font-weight:bold;letter-spacing:2px;}
+.inv-total-sub{font-size:8.5pt;opacity:.8;margin-top:2mm;}
+.inv-total-sub span{margin:0 9px;}
+.inv-page table{width:100%;border-collapse:collapse;margin-bottom:5mm;}
+.inv-page th{background:#1a2744;color:#fff;padding:2.5mm 3mm;font-size:8.5pt;text-align:left;}
+.inv-page td{padding:2mm 3mm;font-size:8.5pt;border-bottom:1px solid #e8eaf0;}
+.inv-page tr:nth-child(even) td{background:#f7f8fc;}
+.inv-subtotal-row td{background:#eef2ff!important;font-weight:bold;color:#1a2744;}
+.inv-total-row td{background:#1a2744!important;color:#fff;font-weight:bold;font-size:9.5pt;}
+.inv-r{text-align:right;}.inv-c{text-align:center;}.inv-bold{font-weight:bold;}
+.inv-bank-box{border:1px solid #d1d5db;border-radius:4px;padding:3mm 4mm;background:#f9fafb;margin-bottom:4mm;}
+.inv-bank-title{font-size:8.5pt;font-weight:bold;color:#1a2744;margin-bottom:2mm;padding-left:6px;border-left:3px solid #f59e0b;}
+.inv-bank-row{font-size:8.5pt;color:#333;margin-top:1mm;}
+.inv-p1-foot{position:absolute;bottom:10mm;left:15mm;right:15mm;font-size:7.5pt;color:#888;border-top:1px solid #eee;padding-top:2mm;}
+.inv-p2-title{font-size:14pt;font-weight:bold;color:#1a2744;margin-bottom:5mm;border-bottom:2px solid #1a2744;padding-bottom:2mm;}
+.inv-p2-title span{font-size:9pt;color:#666;font-weight:normal;}
+.inv-emp-block{margin-bottom:7mm;}
+.inv-emp-block-title{font-size:10pt;font-weight:bold;color:#1a2744;margin-bottom:2mm;padding-left:7px;border-left:4px solid #f59e0b;}
+.inv-emp-block-title span{font-size:8pt;color:#666;font-weight:normal;}
+.inv-page table.inv-detail th{font-size:8pt;padding:2mm;}
+.inv-page table.inv-detail td{font-size:8pt;padding:1.6mm 2mm;}
 @page{size:A4;margin:0;}
 `;
 
@@ -508,40 +507,40 @@ table.detail td{font-size:8pt;padding:1.6mm 2mm;}
 const SCREEN_CSS=`
 #pv-scroll *{margin:0;padding:0;box-sizing:border-box;}
 #pv-scroll{font-family:'Hiragino Kaku Gothic ProN','Hiragino Sans','Meiryo',sans-serif;color:#1a1a1a;}
-.page{width:100%;max-width:760px;min-height:auto;background:#fff;border-radius:6px;padding:22px 18px;box-shadow:0 6px 24px rgba(0,0,0,.35);}
-.p1-top{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;margin-bottom:14px;}
-.p1-title{font-size:22px;font-weight:bold;letter-spacing:5px;color:#1a2744;}
-.p1-meta{font-size:11px;color:#555;margin-top:5px;line-height:1.7;}
-.p1-issuer{text-align:right;}
-.p1-issuer-name{font-size:15px;font-weight:bold;color:#1a2744;}
-.p1-issuer-detail{font-size:10px;color:#555;margin-top:3px;line-height:1.6;}
-.divider{border:none;border-top:2px solid #1a2744;margin:10px 0 14px;}
-.client-name{font-size:18px;font-weight:bold;color:#1a2744;margin-bottom:4px;}
-.client-detail{font-size:11px;color:#555;line-height:1.6;}
-.subject{font-size:12px;color:#333;padding:9px 0;border-bottom:1px solid #ddd;margin:10px 0 16px;}
-.total-box{background:#1a2744;color:#fff;border-radius:8px;padding:18px;margin-bottom:16px;text-align:center;}
-.total-label{font-size:11px;opacity:.82;margin-bottom:6px;letter-spacing:1px;}
-.total-amount{font-size:34px;font-weight:bold;letter-spacing:1px;}
-.total-sub{font-size:11px;opacity:.85;margin-top:6px;}
-.total-sub span{margin:0 8px;}
-table{width:100%;border-collapse:collapse;margin-bottom:16px;}
-th{background:#1a2744;color:#fff;padding:8px 7px;font-size:11px;text-align:left;}
-td{padding:7px;font-size:11px;border-bottom:1px solid #e8eaf0;}
-tr:nth-child(even) td{background:#f7f8fc;}
-.subtotal-row td{background:#eef2ff!important;font-weight:bold;color:#1a2744;}
-.total-row td{background:#1a2744!important;color:#fff;font-weight:bold;font-size:12px;}
-.r{text-align:right;}.c{text-align:center;}.bold{font-weight:bold;}
-.bank-box{border:1px solid #d1d5db;border-radius:6px;padding:12px;background:#f9fafb;margin-bottom:14px;}
-.bank-title{font-size:11px;font-weight:bold;color:#1a2744;margin-bottom:6px;padding-left:7px;border-left:3px solid #f59e0b;}
-.bank-row{font-size:11px;color:#333;margin-top:3px;}
-.p1-foot{font-size:10px;color:#888;border-top:1px solid #eee;padding-top:8px;margin-top:8px;}
-.p2-title{font-size:18px;font-weight:bold;color:#1a2744;margin-bottom:14px;border-bottom:2px solid #1a2744;padding-bottom:7px;}
-.p2-title span{font-size:12px;color:#666;font-weight:normal;}
-.emp-block{margin-bottom:20px;}
-.emp-block-title{font-size:14px;font-weight:bold;color:#1a2744;margin-bottom:7px;padding-left:8px;border-left:4px solid #f59e0b;}
-.emp-block-title span{font-size:11px;color:#666;font-weight:normal;}
-table.detail th{font-size:10px;padding:6px;}
-table.detail td{font-size:10px;padding:5px 6px;}
+.inv-page{width:100%;max-width:760px;min-height:auto;background:#fff;border-radius:6px;padding:22px 18px;box-shadow:0 6px 24px rgba(0,0,0,.35);}
+.inv-p1-top{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;margin-bottom:14px;}
+.inv-p1-title{font-size:22px;font-weight:bold;letter-spacing:5px;color:#1a2744;}
+.inv-p1-meta{font-size:11px;color:#555;margin-top:5px;line-height:1.7;}
+.inv-p1-issuer{text-align:right;}
+.inv-p1-issuer-name{font-size:15px;font-weight:bold;color:#1a2744;}
+.inv-p1-issuer-detail{font-size:10px;color:#555;margin-top:3px;line-height:1.6;}
+.inv-divider{border:none;border-top:2px solid #1a2744;margin:10px 0 14px;}
+.inv-client-name{font-size:18px;font-weight:bold;color:#1a2744;margin-bottom:4px;}
+.inv-client-detail{font-size:11px;color:#555;line-height:1.6;}
+.inv-subject{font-size:12px;color:#333;padding:9px 0;border-bottom:1px solid #ddd;margin:10px 0 16px;}
+.inv-total-box{background:#1a2744;color:#fff;border-radius:8px;padding:18px;margin-bottom:16px;text-align:center;}
+.inv-total-label{font-size:11px;opacity:.82;margin-bottom:6px;letter-spacing:1px;}
+.inv-total-amount{font-size:34px;font-weight:bold;letter-spacing:1px;}
+.inv-total-sub{font-size:11px;opacity:.85;margin-top:6px;}
+.inv-total-sub span{margin:0 8px;}
+.inv-page table{width:100%;border-collapse:collapse;margin-bottom:16px;}
+.inv-page th{background:#1a2744;color:#fff;padding:8px 7px;font-size:11px;text-align:left;}
+.inv-page td{padding:7px;font-size:11px;border-bottom:1px solid #e8eaf0;}
+.inv-page tr:nth-child(even) td{background:#f7f8fc;}
+.inv-subtotal-row td{background:#eef2ff!important;font-weight:bold;color:#1a2744;}
+.inv-total-row td{background:#1a2744!important;color:#fff;font-weight:bold;font-size:12px;}
+.inv-r{text-align:right;}.inv-c{text-align:center;}.inv-bold{font-weight:bold;}
+.inv-bank-box{border:1px solid #d1d5db;border-radius:6px;padding:12px;background:#f9fafb;margin-bottom:14px;}
+.inv-bank-title{font-size:11px;font-weight:bold;color:#1a2744;margin-bottom:6px;padding-left:7px;border-left:3px solid #f59e0b;}
+.inv-bank-row{font-size:11px;color:#333;margin-top:3px;}
+.inv-p1-foot{font-size:10px;color:#888;border-top:1px solid #eee;padding-top:8px;margin-top:8px;}
+.inv-p2-title{font-size:18px;font-weight:bold;color:#1a2744;margin-bottom:14px;border-bottom:2px solid #1a2744;padding-bottom:7px;}
+.inv-p2-title span{font-size:12px;color:#666;font-weight:normal;}
+.inv-emp-block{margin-bottom:20px;}
+.inv-emp-block-title{font-size:14px;font-weight:bold;color:#1a2744;margin-bottom:7px;padding-left:8px;border-left:4px solid #f59e0b;}
+.inv-emp-block-title span{font-size:11px;color:#666;font-weight:normal;}
+.inv-page table.inv-detail th{font-size:10px;padding:6px;}
+.inv-page table.inv-detail td{font-size:10px;padding:5px 6px;}
 `;
 
 /* ===== 設定タブ ===== */
