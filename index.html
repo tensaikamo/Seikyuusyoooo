@@ -186,6 +186,22 @@ select{background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/
 
 @media (prefers-reduced-motion: reduce){*,*::before,*::after{animation-duration:.01ms!important;transition-duration:.01ms!important;}}
 
+/* ===== 請求書プレビュー オーバーレイ ===== */
+.pv-overlay{position:fixed;inset:0;z-index:600;background:#54585f;display:none;flex-direction:column;}
+.pv-overlay.show{display:flex;animation:fade .2s ease;}
+.pv-bar{flex-shrink:0;background:var(--navy);color:#fff;display:flex;align-items:center;justify-content:space-between;gap:10px;padding:calc(var(--st) + 11px) 14px 11px;}
+.pv-close{background:none;border:none;color:#fff;font-size:.92rem;font-weight:600;cursor:pointer;padding:6px 4px;min-height:40px;}
+.pv-title{font-size:.92rem;font-weight:700;}
+.pv-print{background:var(--amber);color:#3a2606;border:none;border-radius:9px;font-size:.86rem;font-weight:800;padding:9px 16px;min-height:40px;cursor:pointer;}
+.pv-hint{flex-shrink:0;background:#2f3a52;color:#cdd5e4;font-size:.72rem;line-height:1.6;padding:9px 14px;}
+.pv-scroll{flex:1;overflow:auto;-webkit-overflow-scrolling:touch;padding:16px 0 calc(28px + var(--sb));display:flex;flex-direction:column;align-items:center;gap:16px;}
+/* プレビュー内のA4ページを画面幅にフィット（縮小表示） */
+.pv-scroll .page{
+  width:210mm;min-height:297mm;background:#fff;box-shadow:0 6px 24px rgba(0,0,0,.4);
+  transform-origin:top center;flex-shrink:0;
+}
+@media (prefers-reduced-motion: reduce){.pv-overlay.show{animation:none;}}
+
 /* ===== PRINT (A4 invoice) — 画面では隠す ===== */
 #print-root{display:none;}
 @media print{
@@ -342,6 +358,17 @@ select{background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/
 
 <!-- PRINT ROOT -->
 <div id="print-root"></div>
+
+<!-- 請求書プレビュー（全画面オーバーレイ） -->
+<div class="pv-overlay" id="pv-overlay">
+  <div class="pv-bar">
+    <button class="pv-close" id="pv-close" type="button">‹ 閉じる</button>
+    <div class="pv-title">請求書プレビュー</div>
+    <button class="pv-print" id="pv-print" type="button">保存・印刷</button>
+  </div>
+  <div class="pv-hint" id="pv-hint">下にスクロールして全体を確認できます。「保存・印刷」→ プリント画面で指を広げると PDF として保存できます。</div>
+  <div class="pv-scroll" id="pv-scroll"></div>
+</div>
 
 <div class="toast" id="toast"></div>
 

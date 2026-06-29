@@ -3,7 +3,7 @@
    日給管理・請求書 — iPhone単一HTML版（依存ゼロ）
    ネイビー×白 / IndexedDB / A4 2ページPDF
    ============================================================= */
-const APP_VERSION='1.0.0';
+const APP_VERSION='1.0.1';
 
 /* ---------- HTML escape ---------- */
 function esc(s){return String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
@@ -341,11 +341,25 @@ $('batch-pdf-btn').addEventListener('click',()=>{
 });
 
 function printHTML(innerHTML){
-  const root=$('print-root');
-  root.innerHTML=innerHTML;
-  // iOSはポップアップが詰まりやすいので、同一ページ内で window.print() を呼ぶ
-  setTimeout(()=>{window.print();},80);
+  // 画面内に全画面プレビューを表示（ホーム画面PWAでも確実に動く）
+  $('pv-scroll').innerHTML=innerHTML;
+  $('print-root').innerHTML=innerHTML; // 「保存・印刷」用に原寸も保持
+  $('pv-overlay').classList.add('show');
+  fitPreview();
 }
+function fitPreview(){
+  const scroll=$('pv-scroll');
+  const pages=scroll.querySelectorAll('.page');
+  if(!pages.length)return;
+  const mmToPx=793.7/210;       // 210mm ≒ 793.7px
+  const pageW=210*mmToPx;
+  const avail=Math.min(window.innerWidth-24,760);
+  const scale=Math.min(avail/pageW,1);
+  pages.forEach(p=>{ p.style.zoom=scale; });
+}
+window.addEventListener('resize',()=>{if($('pv-overlay').classList.contains('show'))fitPreview();});
+$('pv-close').addEventListener('click',()=>$('pv-overlay').classList.remove('show'));
+$('pv-print').addEventListener('click',()=>{setTimeout(()=>{window.print();},60);});
 
 /* A4 2ページ請求書HTML（ネイビー×白・帳票風） */
 function buildInvoiceHTML(reports,period,batch){
