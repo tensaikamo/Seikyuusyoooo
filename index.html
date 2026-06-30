@@ -134,6 +134,12 @@ select{background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/
 .att-mini label{font-size:.64rem;color:var(--mut);white-space:nowrap;}
 .att-mini input{padding:7px 9px;min-height:38px;font-size:14px;text-align:right;}
 .day-total{font-size:.74rem;font-weight:700;color:var(--navy);text-align:right;}
+.shift-label{font-size:.6rem;font-weight:800;letter-spacing:.08em;color:var(--mut);margin-bottom:2px;}
+.shift-label.night{color:#7c5cff;}
+.att-b.night.sel{background:#5b46c9;border-color:#5b46c9;}
+.night-sec{margin-top:8px;padding-top:8px;border-top:1px dashed var(--line-2);}
+.night-add{margin-top:7px;background:#f1effb;border:1px dashed #b9aef0;color:#5b46c9;border-radius:8px;min-height:34px;font-size:.74rem;font-weight:700;cursor:pointer;padding:0 12px;width:100%;}
+.night-add:active{background:#e8e3fa;}
 
 /* running total bar */
 .runbar{
@@ -345,6 +351,7 @@ select{background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/
     </div>
     <div class="field"><label class="fl">名前</label><input type="text" id="emp-name" placeholder="例：田中"></div>
     <div class="field"><label class="fl">日給（円）</label><input type="number" id="emp-wage" inputmode="numeric" placeholder="例：18000"></div>
+    <div class="field"><label class="fl">夜間単価（円）<span style="color:var(--mut);font-weight:400;">／夜勤がなければ空欄でOK</span></label><input type="number" id="emp-nwage" inputmode="numeric" placeholder="例：22500"></div>
     <div id="emp-ot-hint" style="font-size:.74rem;color:var(--sub);margin-bottom:14px;"></div>
     <button class="btn btn-navy" id="emp-save" type="button">保存</button>
     <button class="btn btn-danger btn-sm" id="emp-delete" type="button" style="margin-top:9px;display:none;">この従業員を削除</button>

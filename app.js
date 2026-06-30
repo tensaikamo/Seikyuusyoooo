@@ -3,7 +3,7 @@
    日給管理・請求書 — iPhone単一HTML版（依存ゼロ）
    ネイビー×白 / IndexedDB / A4 2ページPDF
    ============================================================= */
-const APP_VERSION='1.0.3';
+const APP_VERSION='1.1.0';
 
 /* ---------- HTML escape ---------- */
 function esc(s){return String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
@@ -27,13 +27,14 @@ const DEFAULT_SETTINGS={
   bank:{bankName:'',branchName:'',accountType:'普通',accountNumber:'',accountHolder:''}
 };
 let STATE={
-  employees:[],      // {id,name,dailyWage,createdAt}
-  records:[],        // {id,employeeId,date,attendance,overtimeHours,transportFee,note}
+  employees:[],      // {id,name,dailyWage,nightWage,createdAt}
+  records:[],        // {id,employeeId,date,attendance,overtimeHours,nightAttendance,nightOvertimeHours,transportFee,note}
   settings:JSON.parse(JSON.stringify(DEFAULT_SETTINGS)),
   ready:false
 };
 let viewY=new Date().getFullYear(), viewM=new Date().getMonth()+1; // 1-12
 let selEmp=null;       // 勤怠タブで選択中のemployeeId
+let nightExpanded=new Set(); // その月で夜勤欄を開いている日付
 let billY=new Date().getFullYear(), billM=new Date().getMonth()+1; // 請求タブの請求月
 let editEmpId=null;    // モーダル編集対象
 
@@ -51,12 +52,30 @@ function ymd(y,m,d){return `${y}-${pad2(m)}-${pad2(d)}`;}
 function fmtDateJ(s){const d=new Date(s+'T00:00:00');return `${d.getFullYear()}年${d.getMonth()+1}月${d.getDate()}日`;}
 
 /* ---------- calculations（元アプリと同一ロジック）---------- */
-function overtimeRate(dailyWage){return dailyWage/8*1.25;}
-function dailyTotal(rec,dailyWage){
-  const wage=Math.round(dailyWage*(rec.attendance||0));
-  const ot=Math.round(overtimeRate(dailyWage)*(rec.overtimeHours||0));
+function overtimeRate(wage){return wage/8*1.25;}
+/** 1日の合計。日勤(昼)＋夜勤(夜)＋車代。
+ *  emp.dailyWage … 日勤の日給 / emp.nightWage … 夜勤の夜間単価（未設定なら0）
+ *  rec.attendance/overtimeHours … 日勤の出勤数/残業h
+ *  rec.nightAttendance/nightOvertimeHours … 夜勤の出勤数/残業h */
+function dailyTotal(rec,emp){
+  // 後方互換: 第2引数に数値(dailyWage)が渡された場合も動くようにする
+  const dayWage=(typeof emp==='number')?emp:((emp&&emp.dailyWage)||0);
+  const nightWage=(typeof emp==='number')?0:((emp&&emp.nightWage)||0);
+  // 日勤
+  const wage=Math.round(dayWage*(rec.attendance||0));
+  const ot=Math.round(overtimeRate(dayWage)*(rec.overtimeHours||0));
+  // 夜勤
+  const nwage=Math.round(nightWage*(rec.nightAttendance||0));
+  const not=Math.round(overtimeRate(nightWage)*(rec.nightOvertimeHours||0));
   const tr=Math.round(rec.transportFee||0);
-  return {wage,ot,tr,total:wage+ot+tr};
+  const total=wage+ot+nwage+not+tr;
+  return {wage,ot,nwage,not,tr,total};
+}
+/** その記録に何か入力があるか（夜勤だけの日も拾う）*/
+function recHasData(r){
+  return (r.attendance||0)>0||(r.overtimeHours||0)>0||
+         (r.nightAttendance||0)>0||(r.nightOvertimeHours||0)>0||
+         (r.transportFee||0)>0;
 }
 function daysInMonthList(y,m){const out=[];const d=new Date(y,m-1,1);while(d.getMonth()===m-1){out.push(ymd(d.getFullYear(),d.getMonth()+1,d.getDate()));d.setDate(d.getDate()+1);}return out;}
 function daysInPeriod(start,end){const out=[];const c=new Date(start+'T00:00:00'),e=new Date(end+'T00:00:00');while(c<=e){out.push(ymd(c.getFullYear(),c.getMonth()+1,c.getDate()));c.setDate(c.getDate()+1);}return out;}
@@ -85,10 +104,20 @@ function calcTax(sub,rate){return Math.floor(sub*(rate/100));}
 
 /** 期間レポート（従業員1人）*/
 function periodReport(emp,start,end){
-  const recs=STATE.records.filter(r=>r.employeeId===emp.id&&r.date>=start&&r.date<=end&&((r.attendance||0)>0||(r.overtimeHours||0)>0||(r.transportFee||0)>0));
-  let att=0,wage=0,ot=0,tr=0;
-  recs.forEach(r=>{const t=dailyTotal(r,emp.dailyWage);att+=r.attendance||0;wage+=t.wage;ot+=t.ot;tr+=t.tr;});
-  return {employeeId:emp.id,totalAttendance:att,totalDailyWage:wage,totalOvertimePay:ot,totalTransportFee:tr,grandTotal:wage+ot+tr,records:recs};
+  const recs=STATE.records.filter(r=>r.employeeId===emp.id&&r.date>=start&&r.date<=end&&recHasData(r));
+  let att=0,natt=0,wage=0,ot=0,nwage=0,not=0,tr=0;
+  recs.forEach(r=>{
+    const t=dailyTotal(r,emp);
+    att+=r.attendance||0;
+    natt+=r.nightAttendance||0;
+    wage+=t.wage; ot+=t.ot; nwage+=t.nwage; not+=t.not; tr+=t.tr;
+  });
+  return {employeeId:emp.id,
+    totalAttendance:att, totalNightAttendance:natt,
+    totalDailyWage:wage, totalOvertimePay:ot,
+    totalNightWage:nwage, totalNightOvertimePay:not,
+    totalTransportFee:tr,
+    grandTotal:wage+ot+nwage+not+tr, records:recs};
 }
 
 /* ---------- BOOT ---------- */
@@ -184,25 +213,30 @@ function renderAtt(){
   const otRate=overtimeRate(emp.dailyWage);
 
   let runTotal=0;
+  const otRateN=overtimeRate(emp.nightWage||0);
+  const nightEnabled=(emp.nightWage||0)>0;
   let html=`<div class="card" style="padding:13px 14px;">
     <div class="att-head">
       <div><div class="att-emp">${esc(emp.name)}</div>
-      <div class="att-meta">日給 ${yen(emp.dailyWage)}　残業 ${yen(Math.round(otRate))}/h</div></div>
+      <div class="att-meta">日給 ${yen(emp.dailyWage)}　残業 ${yen(Math.round(otRate))}/h${nightEnabled?`<br>夜間 ${yen(emp.nightWage)}　夜残業 ${yen(Math.round(otRateN))}/h`:''}</div></div>
       <button class="btn btn-ghost btn-sm" style="width:auto;" onclick="openEmpModal('${emp.id}')">編集</button>
     </div></div>`;
 
   html+='<div class="day-list">';
   days.forEach(ds=>{
     const d=new Date(ds+'T00:00:00');const dow=d.getDay();
-    const rec=recMap.get(ds)||{attendance:0,overtimeHours:0,transportFee:0};
-    const t=dailyTotal(rec,emp.dailyWage);
-    const has=(rec.attendance>0||rec.overtimeHours>0||rec.transportFee>0);
+    const rec=recMap.get(ds)||{attendance:0,overtimeHours:0,nightAttendance:0,nightOvertimeHours:0,transportFee:0};
+    const t=dailyTotal(rec,emp);
+    const has=recHasData(rec);
     if(has)runTotal+=t.total;
-    const cls=['day'];if(rec.attendance>0)cls.push('work');if(dow===0)cls.push('weekend');if(dow===6)cls.push('sat');
+    const hasNight=(rec.nightAttendance>0||rec.nightOvertimeHours>0);
+    const showNight=nightEnabled&&(hasNight||nightExpanded.has(ds));
+    const cls=['day'];if(rec.attendance>0||hasNight)cls.push('work');if(dow===0)cls.push('weekend');if(dow===6)cls.push('sat');
     const attOpts=[0.5,1,1.5,2];
     html+=`<div class="${cls.join(' ')}">
       <div class="dcell-l"><div class="dnum">${d.getDate()}</div><div class="ddow">${WEEK[dow]}</div></div>
       <div class="dcell-r">
+        <div class="shift-label">日勤</div>
         <div class="att-btns">
           <button class="att-b${rec.attendance===0?' sel':''}" onclick="setAtt('${ds}','attendance',0)">休</button>
           ${attOpts.map(v=>`<button class="att-b${rec.attendance===v?' sel':''}" onclick="setAtt('${ds}','attendance',${v})">${v}</button>`).join('')}
@@ -211,6 +245,18 @@ function renderAtt(){
           <div class="att-mini"><label>残業h</label><input type="number" inputmode="decimal" value="${rec.overtimeHours||''}" placeholder="0" onchange="setAtt('${ds}','overtimeHours',this.value)"></div>
           <div class="att-mini"><label>車代</label><input type="number" inputmode="numeric" value="${rec.transportFee||''}" placeholder="0" onchange="setAtt('${ds}','transportFee',this.value)"></div>
         </div>
+        ${showNight?`
+        <div class="night-sec">
+          <div class="shift-label night">夜勤</div>
+          <div class="att-btns">
+            <button class="att-b night${(rec.nightAttendance||0)===0?' sel':''}" onclick="setAtt('${ds}','nightAttendance',0)">休</button>
+            ${attOpts.map(v=>`<button class="att-b night${rec.nightAttendance===v?' sel':''}" onclick="setAtt('${ds}','nightAttendance',${v})">${v}</button>`).join('')}
+          </div>
+          <div class="att-sub">
+            <div class="att-mini"><label>夜残業h</label><input type="number" inputmode="decimal" value="${rec.nightOvertimeHours||''}" placeholder="0" onchange="setAtt('${ds}','nightOvertimeHours',this.value)"></div>
+            <div class="att-mini" style="visibility:hidden;"><label>　</label><input disabled></div>
+          </div>
+        </div>`:(nightEnabled?`<button class="night-add" onclick="toggleNight('${ds}')">＋ 夜勤を入力</button>`:'')}
         ${has?`<div class="day-total">${yen(t.total)}</div>`:''}
       </div>
     </div>`;
@@ -225,12 +271,17 @@ function setAtt(date,field,value){
   if(!selEmp)return;
   let v=parseFloat(value)||0; if(v<0)v=0;
   let rec=STATE.records.find(r=>r.employeeId===selEmp&&r.date===date);
-  if(!rec){rec={id:uid(),employeeId:selEmp,date,attendance:0,overtimeHours:0,transportFee:0};STATE.records.push(rec);}
+  if(!rec){rec={id:uid(),employeeId:selEmp,date,attendance:0,overtimeHours:0,nightAttendance:0,nightOvertimeHours:0,transportFee:0};STATE.records.push(rec);}
   rec[field]=v;
   saveRecords();
   renderAtt();
 }
 window.setAtt=setAtt;
+function toggleNight(ds){
+  if(nightExpanded.has(ds))nightExpanded.delete(ds);else nightExpanded.add(ds);
+  renderAtt();
+}
+window.toggleNight=toggleNight;
 
 /* ---------- 従業員モーダル ---------- */
 function openEmpModal(id){
@@ -239,6 +290,7 @@ function openEmpModal(id){
   $('emp-modal-title').textContent=emp?'従業員を編集':'従業員を追加';
   $('emp-name').value=emp?emp.name:'';
   $('emp-wage').value=emp?emp.dailyWage:'';
+  $('emp-nwage').value=(emp&&emp.nightWage)?emp.nightWage:'';
   $('emp-delete').style.display=emp?'flex':'none';
   updateEmpHint();
   $('emp-modal').classList.add('show');
@@ -248,20 +300,27 @@ function closeEmpModal(){$('emp-modal').classList.remove('show');editEmpId=null;
 $('emp-modal-close').addEventListener('click',closeEmpModal);
 $('emp-modal').addEventListener('click',e=>{if(e.target===$('emp-modal'))closeEmpModal();});
 $('emp-wage').addEventListener('input',updateEmpHint);
+$('emp-nwage').addEventListener('input',updateEmpHint);
 function updateEmpHint(){
   const w=parseInt($('emp-wage').value,10)||0;
-  $('emp-ot-hint').textContent=w>0?`残業単価（自動）= ${yen(w)} ÷ 8h × 1.25 = ${yen(Math.round(overtimeRate(w)))}/h`:'';
+  const nw=parseInt($('emp-nwage').value,10)||0;
+  let lines=[];
+  if(w>0) lines.push(`日勤残業 = ${yen(w)} ÷ 8 × 1.25 = ${yen(Math.round(overtimeRate(w)))}/h`);
+  if(nw>0) lines.push(`夜勤残業 = ${yen(nw)} ÷ 8 × 1.25 = ${yen(Math.round(overtimeRate(nw)))}/h`);
+  $('emp-ot-hint').innerHTML=lines.join('<br>');
 }
 $('emp-save').addEventListener('click',()=>{
   const name=$('emp-name').value.trim();
   const wage=parseInt($('emp-wage').value,10);
+  const nwageRaw=$('emp-nwage').value.trim();
+  const nwage=nwageRaw===''?0:(parseInt(nwageRaw,10)||0);
   if(!name){toast('⚠️ 名前を入力してください');return;}
   if(isNaN(wage)||wage<=0){toast('⚠️ 日給を正しく入力してください');return;}
   if(editEmpId){
     const e=STATE.employees.find(x=>x.id===editEmpId);
-    if(e){e.name=name;e.dailyWage=wage;}
+    if(e){e.name=name;e.dailyWage=wage;e.nightWage=nwage;}
   }else{
-    const e={id:uid(),name,dailyWage:wage,createdAt:new Date().toISOString()};
+    const e={id:uid(),name,dailyWage:wage,nightWage:nwage,createdAt:new Date().toISOString()};
     STATE.employees.push(e);selEmp=e.id;
   }
   saveEmployees();closeEmpModal();renderEmpRow();renderAtt();
@@ -309,9 +368,10 @@ function renderBill(){
     div.innerHTML=`
       <div class="sum-emp-top"><div class="sum-emp-name">${esc(emp.name)}</div><div class="sum-emp-total">${yen(rep.grandTotal)}</div></div>
       <div class="sum-emp-detail">
-        <span>出勤 ${rep.totalAttendance}日</span>
+        <span>日勤 ${rep.totalAttendance}日</span>
         <span>日給 ${yen(rep.totalDailyWage)}</span>
         <span>残業 ${yen(rep.totalOvertimePay)}</span>
+        ${rep.totalNightAttendance>0||rep.totalNightWage>0?`<span>夜勤 ${rep.totalNightAttendance}日</span><span>夜間 ${yen(rep.totalNightWage)}</span><span>夜残業 ${yen(rep.totalNightOvertimePay)}</span>`:''}
         <span>車代 ${yen(rep.totalTransportFee)}</span>
       </div>
       <button class="btn btn-navy btn-sm sum-emp-btn" onclick="makeInvoice('${emp.id}')">📄 ${esc(emp.name)}の請求書PDF</button>`;
@@ -369,13 +429,19 @@ function buildInvoiceHTML(reports,period,batch,cssMode){
 
   // ---- 1ページ目 ----
   const titleSub=batch?`まとめ請求書（${reports.length}名分）`:`${esc(reports[0].emp.name)} 様分`;
-  const empRows=reports.map(r=>`
+  const empRows=reports.map(r=>{
+    const rp=r.rep;
+    const att=rp.totalAttendance+rp.totalNightAttendance;
+    const wage=rp.totalDailyWage+rp.totalNightWage;
+    const ot=rp.totalOvertimePay+rp.totalNightOvertimePay;
+    return `
     <tr><td>${esc(r.emp.name)}</td>
-    <td class="inv-r">${r.rep.totalAttendance}日</td>
-    <td class="inv-r">${yen(r.rep.totalDailyWage)}</td>
-    <td class="inv-r">${yen(r.rep.totalOvertimePay)}</td>
-    <td class="inv-r">${yen(r.rep.totalTransportFee)}</td>
-    <td class="inv-r inv-bold">${yen(r.rep.grandTotal)}</td></tr>`).join('');
+    <td class="inv-r">${att}日</td>
+    <td class="inv-r">${yen(wage)}</td>
+    <td class="inv-r">${yen(ot)}</td>
+    <td class="inv-r">${yen(rp.totalTransportFee)}</td>
+    <td class="inv-r inv-bold">${yen(rp.grandTotal)}</td></tr>`;
+  }).join('');
 
   const bankBlock=(bank.bankName||bank.accountNumber)?`
     <div class="inv-bank-box"><div class="inv-bank-title">お振込先</div>
@@ -431,28 +497,42 @@ function buildInvoiceHTML(reports,period,batch,cssMode){
   let page2inner='';
   reports.forEach(({emp,rep})=>{
     const otRate=overtimeRate(emp.dailyWage);
+    const nightOn=(emp.nightWage||0)>0||rep.totalNightWage>0;
+    const otRateN=overtimeRate(emp.nightWage||0);
     const rows=daysInPeriod(period.start,period.end).map(ds=>{
       const rec=rep.records.find(r=>r.date===ds);
       if(!rec)return '';
-      const t=dailyTotal(rec,emp.dailyWage);
+      const t=dailyTotal(rec,emp);
       const d=new Date(ds+'T00:00:00');
-      return `<tr>
-        <td>${d.getMonth()+1}/${d.getDate()}(${WEEK[d.getDay()]})</td>
-        <td class="inv-c">${rec.attendance}</td>
-        <td class="inv-r">${yen(t.wage)}</td>
-        <td class="inv-c">${rec.overtimeHours||0}h</td>
-        <td class="inv-r">${yen(t.ot)}</td>
-        <td class="inv-r">${yen(t.tr)}</td>
-        <td class="inv-r inv-bold">${yen(t.total)}</td>
-      </tr>`;
+      const dateLbl=`${d.getMonth()+1}/${d.getDate()}(${WEEK[d.getDay()]})`;
+      const hasDay=(rec.attendance||0)>0||(rec.overtimeHours||0)>0;
+      const hasNight=(rec.nightAttendance||0)>0||(rec.nightOvertimeHours||0)>0;
+      let out='';
+      // 車代は当日1回だけ（日勤行があれば日勤側、なければ夜勤側）
+      const carOnDay=hasDay;
+      if(hasDay){
+        const dtl=t.wage+t.ot+(carOnDay?t.tr:0);
+        out+=`<tr><td>${dateLbl}</td><td class="inv-c">日勤</td><td class="inv-c">${rec.attendance||0}</td><td class="inv-r">${yen(t.wage)}</td><td class="inv-r">${yen(t.ot)}</td><td class="inv-r">${carOnDay?yen(t.tr):'—'}</td><td class="inv-r inv-bold">${yen(dtl)}</td></tr>`;
+      }
+      if(hasNight){
+        const ntl=t.nwage+t.not+(!carOnDay?t.tr:0);
+        out+=`<tr><td>${hasDay?'':dateLbl}</td><td class="inv-c">夜勤</td><td class="inv-c">${rec.nightAttendance||0}</td><td class="inv-r">${yen(t.nwage)}</td><td class="inv-r">${yen(t.not)}</td><td class="inv-r">${!carOnDay?yen(t.tr):'—'}</td><td class="inv-r inv-bold">${yen(ntl)}</td></tr>`;
+      }
+      if(!hasDay&&!hasNight&&(rec.transportFee||0)>0){
+        out+=`<tr><td>${dateLbl}</td><td class="inv-c">—</td><td class="inv-c">0</td><td class="inv-r">¥0</td><td class="inv-r">¥0</td><td class="inv-r">${yen(t.tr)}</td><td class="inv-r inv-bold">${yen(t.tr)}</td></tr>`;
+      }
+      return out;
     }).join('');
+    const totWage=rep.totalDailyWage+rep.totalNightWage;
+    const totOt=rep.totalOvertimePay+rep.totalNightOvertimePay;
+    const totAtt=rep.totalAttendance+rep.totalNightAttendance;
     page2inner+=`
       <div class="inv-emp-block">
-        <div class="inv-emp-block-title">${esc(emp.name)}　<span>日給 ${yen(emp.dailyWage)} / 残業 ${yen(Math.round(otRate))}/h</span></div>
+        <div class="inv-emp-block-title">${esc(emp.name)}　<span>日給 ${yen(emp.dailyWage)} / 残業 ${yen(Math.round(otRate))}/h${nightOn?` ・ 夜間 ${yen(emp.nightWage||0)} / 夜残業 ${yen(Math.round(otRateN))}/h`:''}</span></div>
         <table class="inv-detail">
-          <thead><tr><th>日付</th><th class="inv-c">出勤</th><th class="inv-r">人工代</th><th class="inv-c">残業</th><th class="inv-r">残業代</th><th class="inv-r">車代</th><th class="inv-r">計</th></tr></thead>
+          <thead><tr><th>日付</th><th class="inv-c">区分</th><th class="inv-c">出勤</th><th class="inv-r">人工代</th><th class="inv-r">残業代</th><th class="inv-r">車代</th><th class="inv-r">計</th></tr></thead>
           <tbody>${rows}
-            <tr class="inv-total-row"><td>合計</td><td class="inv-c">${rep.totalAttendance}</td><td class="inv-r">${yen(rep.totalDailyWage)}</td><td></td><td class="inv-r">${yen(rep.totalOvertimePay)}</td><td class="inv-r">${yen(rep.totalTransportFee)}</td><td class="inv-r">${yen(rep.grandTotal)}</td></tr>
+            <tr class="inv-total-row"><td>合計</td><td class="inv-c">${totAtt}</td><td class="inv-c"></td><td class="inv-r">${yen(totWage)}</td><td class="inv-r">${yen(totOt)}</td><td class="inv-r">${yen(rep.totalTransportFee)}</td><td class="inv-r">${yen(rep.grandTotal)}</td></tr>
           </tbody>
         </table>
       </div>`;
