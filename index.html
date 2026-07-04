@@ -140,6 +140,11 @@ select{background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/
 .night-sec{margin-top:8px;padding-top:8px;border-top:1px dashed var(--line-2);}
 .night-add{margin-top:7px;background:#f1effb;border:1px dashed #b9aef0;color:#5b46c9;border-radius:8px;min-height:34px;font-size:.74rem;font-weight:700;cursor:pointer;padding:0 12px;width:100%;}
 .night-add:active{background:#e8e3fa;}
+.bulk-row{display:flex;gap:8px;margin-top:11px;padding-top:11px;border-top:1px solid var(--line);}
+.bulk-b{flex:1;min-height:38px;background:#f3f2ee;border:1px solid var(--line-2);border-radius:9px;font-size:.76rem;font-weight:700;color:var(--sub);cursor:pointer;transition:transform .12s var(--snap);}
+.bulk-b:active{transform:scale(.96);}
+.bulk-b.danger{color:var(--danger);border-color:rgba(220,38,38,.3);background:transparent;}
+.rcheer{font-size:.78rem;font-weight:700;color:#ffd9a8;margin-top:2px;}
 
 /* running total bar */
 .runbar{
@@ -193,7 +198,7 @@ select{background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/
 @media (prefers-reduced-motion: reduce){*,*::before,*::after{animation-duration:.01ms!important;transition-duration:.01ms!important;}}
 
 /* ===== 請求書プレビュー オーバーレイ ===== */
-.pv-overlay{position:fixed;inset:0;z-index:600;background:#54585f;display:none;flex-direction:column;}
+.pv-overlay{position:fixed;inset:0;z-index:600;background:linear-gradient(180deg,#3c4356 0%,#565d6e 100%);display:none;flex-direction:column;}
 .pv-overlay.show{display:flex;animation:fade .2s ease;}
 .pv-bar{flex-shrink:0;background:var(--navy);color:#fff;display:flex;align-items:center;justify-content:space-between;gap:10px;padding:calc(var(--st) + 11px) 14px 11px;}
 .pv-close{background:none;border:none;color:#fff;font-size:.92rem;font-weight:600;cursor:pointer;padding:6px 4px;min-height:40px;}
@@ -213,6 +218,9 @@ select{background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/
 </style>
 </head>
 <body>
+
+<!-- haptic trigger (iOS 18+ native switch haptic) -->
+<span style="position:fixed;width:1px;height:1px;opacity:0;pointer-events:none;left:-9999px;"><input type="checkbox" switch id="hapticChk"><label for="hapticChk" id="hapticLbl"></label></span>
 
 <div id="splash">
   <div class="mk"></div>
