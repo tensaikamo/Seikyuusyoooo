@@ -3,7 +3,7 @@
    日給管理・請求書 — iPhone単一HTML版（依存ゼロ）
    ネイビー×白 / IndexedDB / A4 2ページPDF
    ============================================================= */
-const APP_VERSION='1.2.0';
+const APP_VERSION='1.3.0';
 
 /* ---------- HTML escape ---------- */
 function esc(s){return String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
@@ -35,6 +35,7 @@ let STATE={
 let viewY=new Date().getFullYear(), viewM=new Date().getMonth()+1; // 1-12
 let selEmp=null;       // 勤怠タブで選択中のemployeeId
 let nightExpanded=new Set(); // その月で夜勤欄を開いている日付
+let manualExpanded=new Set(); // 合計手入力欄を開いている日付
 let billY=new Date().getFullYear(), billM=new Date().getMonth()+1; // 請求タブの請求月
 let editEmpId=null;    // モーダル編集対象
 
@@ -69,14 +70,18 @@ function dailyTotal(rec,emp){
   const nwage=Math.round(nightWage*(rec.nightAttendance||0));
   const not=Math.round(overtimeRate(nightWage)*(rec.nightOvertimeHours||0));
   const tr=Math.round(rec.transportFee||0);
-  const total=wage+ot+nwage+not+tr;
-  return {wage,ot,nwage,not,tr,total};
+  const autoTotal=wage+ot+nwage+not+tr;
+  // 手入力の上書き（その日だけ合計を固定）
+  const manual=Number(rec.manualTotal);
+  const overridden=Number.isFinite(manual)&&manual>0;
+  const total=overridden?Math.round(manual):autoTotal;
+  return {wage,ot,nwage,not,tr,autoTotal,total,overridden};
 }
-/** その記録に何か入力があるか（夜勤だけの日も拾う）*/
+/** その記録に何か入力があるか（夜勤・手入力だけの日も拾う）*/
 function recHasData(r){
   return (r.attendance||0)>0||(r.overtimeHours||0)>0||
          (r.nightAttendance||0)>0||(r.nightOvertimeHours||0)>0||
-         (r.transportFee||0)>0;
+         (r.transportFee||0)>0||(Number(r.manualTotal)>0);
 }
 function daysInMonthList(y,m){const out=[];const d=new Date(y,m-1,1);while(d.getMonth()===m-1){out.push(ymd(d.getFullYear(),d.getMonth()+1,d.getDate()));d.setDate(d.getDate()+1);}return out;}
 function daysInPeriod(start,end){const out=[];const c=new Date(start+'T00:00:00'),e=new Date(end+'T00:00:00');while(c<=e){out.push(ymd(c.getFullYear(),c.getMonth()+1,c.getDate()));c.setDate(c.getDate()+1);}return out;}
@@ -111,7 +116,12 @@ function periodReport(emp,start,end){
     const t=dailyTotal(r,emp);
     att+=r.attendance||0;
     natt+=r.nightAttendance||0;
-    wage+=t.wage; ot+=t.ot; nwage+=t.nwage; not+=t.not; tr+=t.tr;
+    if(t.overridden){
+      // 手入力の日は、合計を人工代バケットに寄せて内訳の整合を保つ
+      wage+=t.total;
+    }else{
+      wage+=t.wage; ot+=t.ot; nwage+=t.nwage; not+=t.not; tr+=t.tr;
+    }
   });
   return {employeeId:emp.id,
     totalAttendance:att, totalNightAttendance:natt,
@@ -262,7 +272,12 @@ function renderAtt(){
             <div class="att-mini" style="visibility:hidden;"><label>　</label><input disabled></div>
           </div>
         </div>`:(nightEnabled?`<button class="night-add" onclick="toggleNight('${ds}')">＋ 夜勤を入力</button>`:'')}
-        ${has?`<div class="day-total">${yen(t.total)}</div>`:''}
+        ${t.overridden||manualExpanded.has(ds)?`
+        <div class="manual-sec">
+          <div class="att-mini"><label>合計を手入力</label><input type="number" inputmode="numeric" value="${rec.manualTotal||''}" placeholder="自動計算" onchange="setAtt('${ds}','manualTotal',this.value)"></div>
+          ${t.overridden?`<button class="manual-reset" onclick="setAtt('${ds}','manualTotal',0)">自動に戻す</button>`:''}
+        </div>`:`<button class="manual-add" onclick="toggleManual('${ds}')">✎ 合計を手入力</button>`}
+        ${has?`<div class="day-total${t.overridden?' ovr':''}">${t.overridden?'<span class="ovr-tag">手動</span>':''}${yen(t.total)}</div>`:''}
       </div>
     </div>`;
   });
@@ -279,6 +294,7 @@ function setAtt(date,field,value){
   let rec=STATE.records.find(r=>r.employeeId===selEmp&&r.date===date);
   if(!rec){rec={id:uid(),employeeId:selEmp,date,attendance:0,overtimeHours:0,nightAttendance:0,nightOvertimeHours:0,transportFee:0};STATE.records.push(rec);}
   rec[field]=v;
+  if(field==='manualTotal'&&v===0)manualExpanded.delete(date);
   saveRecords();
   haptic();
   renderAtt();
@@ -290,6 +306,12 @@ function toggleNight(ds){
   renderAtt();
 }
 window.toggleNight=toggleNight;
+function toggleManual(ds){
+  if(manualExpanded.has(ds))manualExpanded.delete(ds);else manualExpanded.add(ds);
+  haptic();
+  renderAtt();
+}
+window.toggleManual=toggleManual;
 
 /* 一括入力：平日を1で埋める／この月をクリア */
 function bulkFill(mode){
@@ -314,22 +336,6 @@ function bulkFill(mode){
   }
 }
 window.bulkFill=bulkFill;
-
-/* スワイプで月送り（勤怠タブ） */
-(function(){
-  const page=$('page-att');
-  let sx=0,sy=0,t0=0;
-  page.addEventListener('touchstart',e=>{const t=e.touches[0];sx=t.clientX;sy=t.clientY;t0=Date.now();},{passive:true});
-  page.addEventListener('touchend',e=>{
-    const t=e.changedTouches[0];
-    const dx=t.clientX-sx, dy=t.clientY-sy, dt=Date.now()-t0;
-    if(dt<600&&Math.abs(dx)>70&&Math.abs(dy)<50){
-      if(dx<0){if(viewM===12){viewM=1;viewY++;}else viewM++;}
-      else{if(viewM===1){viewM=12;viewY--;}else viewM--;}
-      haptic();renderAtt();
-    }
-  },{passive:true});
-})();
 
 /* 隠し機能：バージョンを5回タップ → これまでの総支給額 */
 (function(){
@@ -584,6 +590,10 @@ function buildInvoiceHTML(reports,period,batch,cssMode){
       const t=dailyTotal(rec,emp);
       const d=new Date(ds+'T00:00:00');
       const dateLbl=`${d.getMonth()+1}/${d.getDate()}(${WEEK[d.getDay()]})`;
+      // 手入力で上書きした日は1行にまとめて表示
+      if(t.overridden){
+        return `<tr><td class="inv-l">${dateLbl}</td><td class="inv-c">手動</td><td class="inv-c">—</td><td>${yen(t.total)}</td><td>—</td><td>—</td><td class="inv-bold">${yen(t.total)}</td></tr>`;
+      }
       const hasDay=(rec.attendance||0)>0||(rec.overtimeHours||0)>0;
       const hasNight=(rec.nightAttendance||0)>0||(rec.nightOvertimeHours||0)>0;
       let out='';
