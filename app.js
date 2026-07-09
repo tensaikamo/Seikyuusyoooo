@@ -3,7 +3,7 @@
    日給管理・請求書 — iPhone単一HTML版（依存ゼロ）
    ネイビー×白 / IndexedDB / A4 2ページPDF
    ============================================================= */
-const APP_VERSION='1.3.0';
+const APP_VERSION='1.4.0';
 
 /* ---------- HTML escape ---------- */
 function esc(s){return String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
@@ -37,6 +37,8 @@ let selEmp=null;       // 勤怠タブで選択中のemployeeId
 let nightExpanded=new Set(); // その月で夜勤欄を開いている日付
 let manualExpanded=new Set(); // 合計手入力欄を開いている日付
 let billY=new Date().getFullYear(), billM=new Date().getMonth()+1; // 請求タブの請求月
+let lastRunTotal=null;   // runbarカウントアップの前回値
+let lastGrandTotal=null; // 請求合計カウントアップの前回値
 let editEmpId=null;    // モーダル編集対象
 
 const saveEmployees=()=>idbSet('employees',STATE.employees);
@@ -49,6 +51,25 @@ function $(id){return document.getElementById(id);}
 function toast(m){const e=$('toast');e.textContent=m;e.classList.add('show');clearTimeout(e._t);e._t=setTimeout(()=>e.classList.remove('show'),2200);}
 function haptic(){try{$('hapticLbl').click();}catch(e){}}
 function yen(n){return '¥'+Math.round(n||0).toLocaleString('ja-JP');}
+/* 金額の装飾マークアップ（¥を小さく・数字を太く） */
+function yenHTML(n){return `<span class="mo"><span class="mo-y">¥</span><span class="mo-v">${Math.round(n||0).toLocaleString('ja-JP')}</span></span>`;}
+/* 金額カウントアップ。el内の .mo-v（無ければel自身）のテキストを to までアニメーション */
+function animateYen(el,to){
+  if(!el)return;
+  const v=el.querySelector('.mo-v')||el;
+  const target=Math.round(to||0);
+  const from=parseInt((v.textContent||'0').replace(/[^\d-]/g,''),10)||0;
+  const fin=()=>{v.textContent=target.toLocaleString('ja-JP');};
+  if(from===target||matchMedia('(prefers-reduced-motion: reduce)').matches){fin();return;}
+  const t0=performance.now(),dur=550;
+  (function step(t){
+    const p=Math.min(1,(t-t0)/dur),e=1-Math.pow(1-p,3);
+    v.textContent=Math.round(from+(target-from)*e).toLocaleString('ja-JP');
+    if(p<1)requestAnimationFrame(step);else fin();
+  })(t0);
+}
+/* SVGアイコン（ボタン用） */
+const ICON_DOC='<svg class="ic" viewBox="0 0 24 24"><path d="M6.5 2.8h7.2L18.5 7.6v12.1a1.5 1.5 0 0 1-1.5 1.5H6.5A1.5 1.5 0 0 1 5 19.7V4.3a1.5 1.5 0 0 1 1.5-1.5z"/><path d="M13.6 2.8v4.9h4.9"/><path d="M8.5 13h7M8.5 16.5h4.5"/></svg>';
 function pad2(n){return String(n).padStart(2,'0');}
 function ymd(y,m,d){return `${y}-${pad2(m)}-${pad2(d)}`;}
 function fmtDateJ(s){const d=new Date(s+'T00:00:00');return `${d.getFullYear()}年${d.getMonth()+1}月${d.getDate()}日`;}
@@ -84,6 +105,66 @@ function recHasData(r){
          (r.transportFee||0)>0||(Number(r.manualTotal)>0);
 }
 function daysInMonthList(y,m){const out=[];const d=new Date(y,m-1,1);while(d.getMonth()===m-1){out.push(ymd(d.getFullYear(),d.getMonth()+1,d.getDate()));d.setDate(d.getDate()+1);}return out;}
+
+/* ---------- 日本の祝日（依存ゼロ・計算で算出 / 2000〜2099年） ---------- */
+const _holCache={};
+function holidaysOfYear(y){
+  if(_holCache[y])return _holCache[y];
+  const map={};
+  const add=(m,d,name)=>{map[m+'-'+d]=name;};
+  const nthMon=(m,n)=>{const first=new Date(y,m-1,1).getDay();return 1+((8-first)%7)+(n-1)*7;};
+  add(1,1,'元日');
+  add(1,nthMon(1,2),'成人の日');
+  add(2,11,'建国記念の日');
+  if(y>=2020)add(2,23,'天皇誕生日');else if(y<=2018)add(12,23,'天皇誕生日');
+  add(3,Math.floor(20.8431+0.242194*(y-1980)-Math.floor((y-1980)/4)),'春分の日');
+  add(4,29,y>=2007?'昭和の日':'みどりの日');
+  add(5,3,'憲法記念日');
+  if(y>=2007)add(5,4,'みどりの日');
+  add(5,5,'こどもの日');
+  if(y===2020)add(7,23,'海の日');else if(y===2021)add(7,22,'海の日');
+  else if(y>=2003)add(7,nthMon(7,3),'海の日');else add(7,20,'海の日');
+  if(y===2020)add(8,10,'山の日');else if(y===2021)add(8,8,'山の日');
+  else if(y>=2016)add(8,11,'山の日');
+  if(y>=2003)add(9,nthMon(9,3),'敬老の日');else add(9,15,'敬老の日');
+  add(9,Math.floor(23.2488+0.242194*(y-1980)-Math.floor((y-1980)/4)),'秋分の日');
+  if(y===2020)add(7,24,'スポーツの日');else if(y===2021)add(7,23,'スポーツの日');
+  else add(10,nthMon(10,2),y>=2020?'スポーツの日':'体育の日');
+  add(11,3,'文化の日');
+  add(11,23,'勤労感謝の日');
+  const isH=(m,d)=>!!map[m+'-'+d];
+  // 国民の休日（前日も翌日も祝日の平日）
+  const extra=[];
+  for(let m=1;m<=12;m++){
+    const dim=new Date(y,m,0).getDate();
+    for(let d=1;d<=dim;d++){
+      if(isH(m,d))continue;
+      const dt=new Date(y,m-1,d);
+      if(dt.getDay()===0)continue;
+      const pv=new Date(y,m-1,d-1),nx=new Date(y,m-1,d+1);
+      if(pv.getFullYear()===y&&nx.getFullYear()===y&&isH(pv.getMonth()+1,pv.getDate())&&isH(nx.getMonth()+1,nx.getDate()))
+        extra.push([m,d]);
+    }
+  }
+  extra.forEach(([m,d])=>add(m,d,'国民の休日'));
+  // 振替休日（日曜の祝日 → 次の非祝日）
+  const subs=[];
+  for(let m=1;m<=12;m++){
+    const dim=new Date(y,m,0).getDate();
+    for(let d=1;d<=dim;d++){
+      if(!isH(m,d))continue;
+      if(new Date(y,m-1,d).getDay()!==0)continue;
+      let nd=new Date(y,m-1,d+1);
+      while(isH(nd.getMonth()+1,nd.getDate()))nd=new Date(nd.getFullYear(),nd.getMonth(),nd.getDate()+1);
+      if(nd.getFullYear()===y)subs.push([nd.getMonth()+1,nd.getDate()]);
+    }
+  }
+  subs.forEach(([m,d])=>add(m,d,'振替休日'));
+  _holCache[y]=map;
+  return map;
+}
+/** 祝日名（祝日でなければ null） */
+function jpHoliday(y,m,d){return holidaysOfYear(y)[m+'-'+d]||null;}
 function daysInPeriod(start,end){const out=[];const c=new Date(start+'T00:00:00'),e=new Date(end+'T00:00:00');while(c<=e){out.push(ymd(c.getFullYear(),c.getMonth()+1,c.getDate()));c.setDate(c.getDate()+1);}return out;}
 
 /** 締め日から請求期間を計算（closingDay>=29は月末締め） */
@@ -150,6 +231,7 @@ async function boot(){
   if(STATE.employees.length) selEmp=STATE.employees[0].id;
   setTimeout(()=>$('splash').classList.add('hide'),700);
   renderAll();
+  switchTab('home');
 }
 function mergeSettings(s){
   return {...DEFAULT_SETTINGS,...s,
@@ -176,12 +258,15 @@ function switchTab(t){
   document.querySelectorAll('.tb').forEach(b=>b.classList.remove('active'));
   $('page-'+t).classList.add('active');
   $('tb-'+t).classList.add('active');
-  const cfg={att:['日給管理','ATTENDANCE',true],bill:['請求','INVOICE',false],set:['設定','SETTINGS',false]};
+  const cfg={home:['ホーム','DASHBOARD',false],att:['日給管理','ATTENDANCE',true],bill:['請求','INVOICE',false],set:['設定','SETTINGS',false]};
   $('ph-name').textContent=cfg[t][0]; $('ph-sub').textContent=cfg[t][1];
   $('ph-month').style.display=cfg[t][2]?'flex':'none';
+  if(t==='home')renderDash();
   if(t==='bill')renderBill();
   if(t==='set')renderSettingsLists();
 }
+window.switchTab=switchTab;
+$('tb-home').addEventListener('click',()=>switchTab('home'));
 $('tb-att').addEventListener('click',()=>switchTab('att'));
 $('tb-bill').addEventListener('click',()=>switchTab('bill'));
 $('tb-set').addEventListener('click',()=>switchTab('set'));
@@ -193,6 +278,160 @@ function updateHeaderMonth(){$('hm-label').textContent=`${viewY}年${viewM}月`;
 
 /* ---------- RENDER ALL ---------- */
 function renderAll(){updateHeaderMonth();renderEmpRow();renderAtt();}
+
+/* ===== ホーム（ダッシュボード） ===== */
+const CHART_BLUE='#3f5fa7', CHART_AMBER='#d97e06'; // 配色はCVD/コントラスト検証済み
+function monthKey(ds){return ds.slice(0,7);}
+function monthTotalsMap(){
+  const map=new Map(); // 'YYYY-MM' -> 合計
+  STATE.records.forEach(r=>{
+    if(!recHasData(r))return;
+    const emp=STATE.employees.find(e=>e.id===r.employeeId);
+    if(!emp)return;
+    const k=monthKey(r.date);
+    map.set(k,(map.get(k)||0)+dailyTotal(r,emp).total);
+  });
+  return map;
+}
+/* 万単位の短い表記（軸ラベル・統計タイル用） */
+function fmtMan(v){
+  v=Math.round(v||0);
+  if(v===0)return '0';
+  if(v<10000)return v.toLocaleString('ja-JP');
+  const man=v/10000;
+  return (man>=100?Math.round(man):Math.round(man*10)/10)+'万';
+}
+function niceCeil(v){
+  if(v<=0)return 1;
+  const p=Math.pow(10,Math.floor(Math.log10(v)));
+  const n=v/p;
+  const f=n<=1?1:n<=2?2:n<=2.5?2.5:n<=5?5:10;
+  return f*p;
+}
+/* 上端だけ角丸・ベースラインは直角のバー */
+function barPath(x,y,w,h,r){
+  if(h<=0)return '';
+  r=Math.min(r,h,w/2);
+  const x2=x+w,yb=y+h;
+  return `M${x} ${yb} L${x} ${y+r} Q${x} ${y} ${x+r} ${y} L${x2-r} ${y} Q${x2} ${y} ${x2} ${y+r} L${x2} ${yb} Z`;
+}
+let dashMonths=[]; // 直近12ヶ月 [{key,y,m,total}]
+function buildBarChart(){
+  const W=344,H=170,padL=34,padR=6,padT=16,padB=18;
+  const plotW=W-padL-padR,plotH=H-padT-padB;
+  const yMax=niceCeil(Math.max(...dashMonths.map(m=>m.total),1));
+  const ys=v=>padT+plotH-(v/yMax*plotH);
+  const bandW=plotW/12;
+  const barW=Math.min(20,bandW-6);
+  let grid='',bars='',labels='',hits='';
+  [0,yMax/2,yMax].forEach(t=>{
+    const y=ys(t);
+    grid+=`<line x1="${padL}" y1="${y}" x2="${W-padR}" y2="${y}" stroke="#e7ebf2" stroke-width="1"/>`;
+    grid+=`<text x="${padL-5}" y="${y+3}" text-anchor="end" font-size="8.5" fill="#97a0af">${fmtMan(t)}</text>`;
+  });
+  dashMonths.forEach((m,i)=>{
+    const x=padL+i*bandW+(bandW-barW)/2;
+    const h=m.total/yMax*plotH;
+    const y=padT+plotH-h;
+    const curM=(i===11);
+    if(m.total>0)
+      bars+=`<path class="bar" style="animation-delay:${i*35}ms" d="${barPath(x,y,barW,h,4)}" fill="${curM?CHART_AMBER:CHART_BLUE}"/>`;
+    labels+=`<text x="${padL+i*bandW+bandW/2}" y="${H-5}" text-anchor="middle" font-size="8.5" fill="${curM?'#5d6675':'#97a0af'}" font-weight="${curM?'700':'400'}">${m.m}月</text>`;
+    if(curM&&m.total>0)
+      labels+=`<text x="${padL+i*bandW+bandW/2}" y="${y-5}" text-anchor="middle" font-size="9.5" font-weight="700" fill="#5d6675">${fmtMan(m.total)}</text>`;
+    hits+=`<rect x="${padL+i*bandW}" y="${padT}" width="${bandW}" height="${plotH}" fill="transparent" onclick="dashTip(${i})"/>`;
+  });
+  return `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="月別売上の棒グラフ"><g>${grid}</g><g class="bars">${bars}</g><g>${labels}</g><g>${hits}</g></svg>`;
+}
+let dashTipTimer=null;
+function dashTip(i){
+  const m=dashMonths[i];const tip=$('dash-tip');
+  if(!m||!tip)return;
+  const W=344,padL=34,padR=6;
+  const bandW=(W-padL-padR)/12;
+  const cx=(padL+i*bandW+bandW/2)/W*100;
+  tip.textContent=`${m.y}年${m.m}月 ${yen(m.total)}`;
+  tip.style.left=Math.min(86,Math.max(14,cx))+'%';
+  tip.classList.add('show');
+  haptic();
+  clearTimeout(dashTipTimer);
+  dashTipTimer=setTimeout(()=>tip.classList.remove('show'),2200);
+}
+window.dashTip=dashTip;
+function renderDash(){
+  const body=$('dash-body');
+  if(!body)return;
+  if(!STATE.employees.length){
+    body.innerHTML=`<div class="card"><div class="empty">まだデータがありません<br>従業員を登録して勤怠をつけると<br>ここに売上ダッシュボードが表示されます</div>
+      <button class="btn btn-navy" onclick="switchTab('att')">勤怠をつけはじめる</button></div>`;
+    return;
+  }
+  const now=new Date();const Y=now.getFullYear(),M=now.getMonth()+1;
+  const totals=monthTotalsMap();
+  dashMonths=[];
+  for(let back=11;back>=0;back--){
+    const d=new Date(Y,M-1-back,1);
+    const y=d.getFullYear(),m=d.getMonth()+1;
+    const k=`${y}-${pad2(m)}`;
+    dashMonths.push({key:k,y,m,total:totals.get(k)||0});
+  }
+  const cur=dashMonths[11].total;
+  const prev=dashMonths[10].total;
+  let badge;
+  if(prev>0&&cur>0){
+    const pct=Math.round((cur-prev)/prev*100);
+    badge=pct>0?`<span class="dh-badge up">▲ +${pct}%</span>`
+      :pct<0?`<span class="dh-badge down">▼ ${pct}%</span>`
+      :`<span class="dh-badge flat">± 0%</span>`;
+  }else{
+    badge=`<span class="dh-badge flat">先月比 —</span>`;
+  }
+  // 今月の統計＋累計
+  const km=`${Y}-${pad2(M)}`;
+  let att=0,otH=0,cum=0;const days=new Set();
+  STATE.records.forEach(r=>{
+    if(!recHasData(r))return;
+    const emp=STATE.employees.find(e=>e.id===r.employeeId);
+    if(!emp)return;
+    cum+=dailyTotal(r,emp).total;
+    if(monthKey(r.date)!==km)return;
+    att+=(r.attendance||0)+(r.nightAttendance||0);
+    otH+=(r.overtimeHours||0)+(r.nightOvertimeHours||0);
+    days.add(r.date);
+  });
+  const avg=days.size?Math.round(cur/days.size):0;
+  // 従業員別（今月・暦月）
+  const perEmp=STATE.employees
+    .map(e=>({name:e.name,total:periodReport(e,`${km}-01`,`${km}-${pad2(new Date(Y,M,0).getDate())}`).grandTotal}))
+    .filter(x=>x.total>0).sort((a,b)=>b.total-a.total);
+  const maxEmp=perEmp.length?perEmp[0].total:0;
+
+  body.innerHTML=`
+    <div class="dash-hero">
+      <div class="dh-l">今月の売上（${Y}年${M}月・暦月）</div>
+      <div class="dh-v" id="dash-v">${yenHTML(0)}</div>
+      <div class="dh-row">${badge}<span class="dh-sub">先月 ${yen(prev)}</span></div>
+    </div>
+    <div class="stat-grid">
+      <div class="stat"><div class="stat-l">出勤（人工）</div><div class="stat-v">${att}<small>人工</small></div></div>
+      <div class="stat"><div class="stat-l">残業時間</div><div class="stat-v">${otH}<small>h</small></div></div>
+      <div class="stat"><div class="stat-l">稼働日の平均</div><div class="stat-v">${fmtMan(avg)}<small>円/日</small></div></div>
+      <div class="stat"><div class="stat-l">これまでの累計</div><div class="stat-v">${fmtMan(cum)}<small>円</small></div></div>
+    </div>
+    <div class="card">
+      <div class="card-t">月別売上（直近12ヶ月）</div>
+      <div class="chart-wrap">${buildBarChart()}<div class="chart-tip" id="dash-tip"></div></div>
+    </div>
+    <div class="card">
+      <div class="card-t">従業員別（今月）</div>
+      ${perEmp.length?perEmp.map(x=>`
+        <div class="eb-row"><div class="eb-name">${esc(x.name)}</div>
+        <div class="eb-track"><div class="eb-fill" style="width:${maxEmp?Math.round(x.total/maxEmp*100):0}%"></div></div>
+        <div class="eb-val">${yen(x.total)}</div></div>`).join('')
+      :'<div style="font-size:var(--fs-sm);color:var(--mut);">今月の勤怠データはまだありません</div>'}
+    </div>`;
+  animateYen($('dash-v'),cur);
+}
 
 /* ===== 勤怠タブ ===== */
 function renderEmpRow(){
@@ -210,47 +449,21 @@ function renderEmpRow(){
   row.appendChild(add);
 }
 
-function renderAtt(){
-  updateHeaderMonth();
-  const body=$('att-body');
-  const emp=STATE.employees.find(e=>e.id===selEmp);
-  if(!emp){
-    body.innerHTML='<div class="empty">従業員がいません<br>上の「＋ 追加」から登録してください</div>';
-    return;
-  }
-  const days=daysInMonthList(viewY,viewM);
-  const recMap=new Map();
-  STATE.records.forEach(r=>{if(r.employeeId===emp.id)recMap.set(r.date,r);});
-  const otRate=overtimeRate(emp.dailyWage);
+let attView='list'; // 'list' | 'cal'
+function setAttView(v){attView=v;haptic();renderAtt();}
+window.setAttView=setAttView;
 
-  let runTotal=0;
-  const otRateN=overtimeRate(emp.nightWage||0);
+function blankRec(){return {attendance:0,overtimeHours:0,nightAttendance:0,nightOvertimeHours:0,transportFee:0};}
+
+/* 1日分の入力コントロール（リスト行と日別シートで共用） */
+function dayControlsHTML(ds,rec,emp){
+  const t=dailyTotal(rec,emp);
+  const has=recHasData(rec);
   const nightEnabled=(emp.nightWage||0)>0;
-  let html=`<div class="card" style="padding:13px 14px;">
-    <div class="att-head">
-      <div><div class="att-emp">${esc(emp.name)}</div>
-      <div class="att-meta">日給 ${yen(emp.dailyWage)}　残業 ${yen(Math.round(otRate))}/h${nightEnabled?`<br>夜間 ${yen(emp.nightWage)}　夜残業 ${yen(Math.round(otRateN))}/h`:''}</div></div>
-      <button class="btn btn-ghost btn-sm" style="width:auto;" onclick="openEmpModal('${emp.id}')">編集</button>
-    </div>
-    <div class="bulk-row">
-      <button class="bulk-b" onclick="bulkFill('weekday')">平日を1で埋める</button>
-      <button class="bulk-b danger" onclick="bulkFill('clear')">この月をクリア</button>
-    </div></div>`;
-
-  html+='<div class="day-list">';
-  days.forEach(ds=>{
-    const d=new Date(ds+'T00:00:00');const dow=d.getDay();
-    const rec=recMap.get(ds)||{attendance:0,overtimeHours:0,nightAttendance:0,nightOvertimeHours:0,transportFee:0};
-    const t=dailyTotal(rec,emp);
-    const has=recHasData(rec);
-    if(has)runTotal+=t.total;
-    const hasNight=(rec.nightAttendance>0||rec.nightOvertimeHours>0);
-    const showNight=nightEnabled&&(hasNight||nightExpanded.has(ds));
-    const cls=['day'];if(rec.attendance>0||hasNight)cls.push('work');if(dow===0)cls.push('weekend');if(dow===6)cls.push('sat');
-    const attOpts=[0.5,1,1.5,2];
-    html+=`<div class="${cls.join(' ')}">
-      <div class="dcell-l"><div class="dnum">${d.getDate()}</div><div class="ddow">${WEEK[dow]}</div></div>
-      <div class="dcell-r">
+  const hasNight=(rec.nightAttendance>0||rec.nightOvertimeHours>0);
+  const showNight=nightEnabled&&(hasNight||nightExpanded.has(ds));
+  const attOpts=[0.5,1,1.5,2];
+  return `
         <div class="shift-label">日勤</div>
         <div class="att-btns">
           <button class="att-b${rec.attendance===0?' sel':''}" onclick="setAtt('${ds}','attendance',0)">休</button>
@@ -277,15 +490,135 @@ function renderAtt(){
           <div class="att-mini"><label>合計を手入力</label><input type="number" inputmode="numeric" value="${rec.manualTotal||''}" placeholder="自動計算" onchange="setAtt('${ds}','manualTotal',this.value)"></div>
           ${t.overridden?`<button class="manual-reset" onclick="setAtt('${ds}','manualTotal',0)">自動に戻す</button>`:''}
         </div>`:`<button class="manual-add" onclick="toggleManual('${ds}')">✎ 合計を手入力</button>`}
-        ${has?`<div class="day-total${t.overridden?' ovr':''}">${t.overridden?'<span class="ovr-tag">手動</span>':''}${yen(t.total)}</div>`:''}
-      </div>
-    </div>`;
+        ${has?`<div class="day-total${t.overridden?' ovr':''}">${t.overridden?'<span class="ovr-tag">手動</span>':''}${yen(t.total)}</div>`:''}`;
+}
+
+/* カレンダーグリッド（金額ヒートマップ＋出勤ドット＋祝日） */
+function buildCalendar(days,recMap,emp){
+  let max=0;const totals=new Map();
+  days.forEach(ds=>{
+    const rec=recMap.get(ds);
+    if(rec&&recHasData(rec)){const t=dailyTotal(rec,emp).total;totals.set(ds,t);if(t>max)max=t;}
   });
-  html+='</div>';
+  const todayStr=ymd(new Date().getFullYear(),new Date().getMonth()+1,new Date().getDate());
+  const first=new Date(days[0]+'T00:00:00').getDay();
+  let cells='';
+  for(let i=0;i<first;i++)cells+='<div class="cal-cell blank"></div>';
+  days.forEach(ds=>{
+    const d=new Date(ds+'T00:00:00');
+    const dow=d.getDay();
+    const hol=jpHoliday(d.getFullYear(),d.getMonth()+1,d.getDate());
+    const rec=recMap.get(ds);
+    const t=totals.get(ds)||0;
+    const cls=['cal-cell'];
+    if(dow===0||hol)cls.push('sun');else if(dow===6)cls.push('sat');
+    if(ds===todayStr)cls.push('today');
+    const dots=((rec&&rec.attendance>0)?'<i class="dot-day"></i>':'')+((rec&&rec.nightAttendance>0)?'<i class="dot-night"></i>':'');
+    const alpha=max&&t?(0.08+0.42*(t/max)):0;
+    cells+=`<button type="button" class="${cls.join(' ')}"${alpha?` style="background:rgba(63,95,167,${alpha.toFixed(2)})"`:''} onclick="openDaySheet('${ds}')">
+      <span class="cal-d">${d.getDate()}</span>
+      ${dots?`<span class="cal-dots">${dots}</span>`:''}
+      ${hol?`<span class="cal-hol">${esc(hol)}</span>`:''}
+    </button>`;
+  });
+  return `<div class="card">
+    <div class="cal-week">${WEEK.map((w,i)=>`<span class="${i===0?'sun':i===6?'sat':''}">${w}</span>`).join('')}</div>
+    <div class="cal-grid">${cells}</div>
+    <div class="cal-leg"><span><i class="dot-day"></i>日勤</span><span><i class="dot-night"></i>夜勤</span><span><span class="cal-leg-hm"></span>濃いほど金額大</span></div>
+  </div>`;
+}
+
+function renderAtt(){
+  updateHeaderMonth();
+  const body=$('att-body');
+  const emp=STATE.employees.find(e=>e.id===selEmp);
+  if(!emp){
+    body.innerHTML='<div class="empty">従業員がいません<br>上の「＋ 追加」から登録してください</div>';
+    return;
+  }
+  const days=daysInMonthList(viewY,viewM);
+  const recMap=new Map();
+  STATE.records.forEach(r=>{if(r.employeeId===emp.id)recMap.set(r.date,r);});
+  const otRate=overtimeRate(emp.dailyWage);
+  const otRateN=overtimeRate(emp.nightWage||0);
+  const nightEnabled=(emp.nightWage||0)>0;
+
+  let runTotal=0;
+  days.forEach(ds=>{
+    const rec=recMap.get(ds);
+    if(rec&&recHasData(rec))runTotal+=dailyTotal(rec,emp).total;
+  });
+
+  let html=`<div class="card" style="padding:13px 14px;">
+    <div class="att-head">
+      <div><div class="att-emp">${esc(emp.name)}</div>
+      <div class="att-meta">日給 ${yen(emp.dailyWage)}　残業 ${yen(Math.round(otRate))}/h${nightEnabled?`<br>夜間 ${yen(emp.nightWage)}　夜残業 ${yen(Math.round(otRateN))}/h`:''}</div></div>
+      <button class="btn btn-ghost btn-sm" style="width:auto;" onclick="openEmpModal('${emp.id}')">編集</button>
+    </div>
+    <div class="bulk-row">
+      <button class="bulk-b" onclick="bulkFill('weekday')">平日を1で埋める</button>
+      <button class="bulk-b danger" onclick="bulkFill('clear')">この月をクリア</button>
+    </div></div>`;
+
+  html+=`<div class="seg">
+    <button class="seg-b${attView==='list'?' sel':''}" onclick="setAttView('list')">リスト</button>
+    <button class="seg-b${attView==='cal'?' sel':''}" onclick="setAttView('cal')">カレンダー</button>
+  </div>`;
+
+  if(attView==='cal'){
+    html+=buildCalendar(days,recMap,emp);
+  }else{
+    html+='<div class="day-list">';
+    days.forEach(ds=>{
+      const d=new Date(ds+'T00:00:00');const dow=d.getDay();
+      const hol=jpHoliday(d.getFullYear(),d.getMonth()+1,d.getDate());
+      const rec=recMap.get(ds)||blankRec();
+      const hasNight=(rec.nightAttendance>0||rec.nightOvertimeHours>0);
+      const cls=['day'];
+      if(rec.attendance>0||hasNight)cls.push('work');
+      if(dow===0||hol)cls.push('weekend');
+      if(dow===6&&!hol)cls.push('sat');
+      html+=`<div class="${cls.join(' ')}">
+      <div class="dcell-l"><div class="dnum">${d.getDate()}</div><div class="ddow">${WEEK[dow]}</div>${hol?`<div class="dhol">${esc(hol)}</div>`:''}</div>
+      <div class="dcell-r">${dayControlsHTML(ds,rec,emp)}</div>
+    </div>`;
+    });
+    html+='</div>';
+  }
 
   const cheer=runTotal===0?'今月はこれから':runTotal<100000?'コツコツ積み上げ中':runTotal<300000?'今月もお疲れさま':'おっ、いい月だ';
-  html+=`<div class="runbar"><div><div class="rl">${viewY}年${viewM}月 合計（暦月）</div><div class="rcheer">${cheer}</div></div><span class="rv">${yen(runTotal)}</span></div>`;
+  const seed=(lastRunTotal==null)?0:lastRunTotal;
+  html+=`<div class="runbar"><div><div class="rl">${viewY}年${viewM}月 合計（暦月）</div><div class="rcheer">${cheer}</div></div><span class="rv" id="run-v">${yenHTML(seed)}</span></div>`;
   body.innerHTML=html;
+  animateYen($('run-v'),runTotal);
+  lastRunTotal=runTotal;
+}
+
+/* ---------- 日別シート（カレンダーのセルタップ） ---------- */
+let daySheetDate=null;
+function openDaySheet(ds){
+  if(!selEmp)return;
+  daySheetDate=ds;
+  renderDaySheet();
+  $('day-modal').classList.add('show');
+  haptic();
+}
+window.openDaySheet=openDaySheet;
+function closeDaySheet(){daySheetDate=null;$('day-modal').classList.remove('show');}
+$('day-modal-close').addEventListener('click',closeDaySheet);
+$('day-modal').addEventListener('click',e=>{if(e.target===$('day-modal'))closeDaySheet();});
+function renderDaySheet(){
+  if(!daySheetDate)return;
+  const emp=STATE.employees.find(e=>e.id===selEmp);
+  if(!emp){closeDaySheet();return;}
+  const ds=daySheetDate;
+  const d=new Date(ds+'T00:00:00');
+  const hol=jpHoliday(d.getFullYear(),d.getMonth()+1,d.getDate());
+  const rec=STATE.records.find(r=>r.employeeId===emp.id&&r.date===ds)||blankRec();
+  $('day-modal-title').innerHTML=`${d.getMonth()+1}月${d.getDate()}日（${WEEK[d.getDay()]}）`+
+    (hol?`<span style="color:var(--danger);font-size:.72em;font-weight:700;">　${esc(hol)}</span>`:'')+
+    `<span style="color:var(--sub);font-size:.72em;font-weight:700;">　${esc(emp.name)}</span>`;
+  $('day-sheet-body').innerHTML=`<div class="dcell-r">${dayControlsHTML(ds,rec,emp)}</div>`;
 }
 
 function setAtt(date,field,value){
@@ -298,18 +631,21 @@ function setAtt(date,field,value){
   saveRecords();
   haptic();
   renderAtt();
+  if(daySheetDate)renderDaySheet();
 }
 window.setAtt=setAtt;
 function toggleNight(ds){
   if(nightExpanded.has(ds))nightExpanded.delete(ds);else nightExpanded.add(ds);
   haptic();
   renderAtt();
+  if(daySheetDate)renderDaySheet();
 }
 window.toggleNight=toggleNight;
 function toggleManual(ds){
   if(manualExpanded.has(ds))manualExpanded.delete(ds);else manualExpanded.add(ds);
   haptic();
   renderAtt();
+  if(daySheetDate)renderDaySheet();
 }
 window.toggleManual=toggleManual;
 
@@ -324,15 +660,19 @@ function bulkFill(mode){
     return;
   }
   if(mode==='weekday'){
-    let n=0;
+    let n=0,nHol=0;
     days.forEach(ds=>{
-      const dow=new Date(ds+'T00:00:00').getDay();
+      const d=new Date(ds+'T00:00:00');const dow=d.getDay();
       if(dow===0||dow===6)return;
       let rec=STATE.records.find(r=>r.employeeId===selEmp&&r.date===ds);
       if(!rec){rec={id:uid(),employeeId:selEmp,date:ds,attendance:0,overtimeHours:0,nightAttendance:0,nightOvertimeHours:0,transportFee:0};STATE.records.push(rec);}
-      if((rec.attendance||0)===0){rec.attendance=1;n++;}
+      if((rec.attendance||0)===0){
+        rec.attendance=1;n++;
+        if(jpHoliday(d.getFullYear(),d.getMonth()+1,d.getDate()))nHol++;
+      }
     });
-    saveRecords();haptic();renderAtt();toast(`平日${n}日を出勤1にしました`);
+    saveRecords();haptic();renderAtt();
+    toast(`平日${n}日を出勤1にしました${nHol?`（祝日${nHol}日を含む）`:''}`);
   }
 }
 window.bulkFill=bulkFill;
@@ -427,7 +767,14 @@ function renderBill(){
   let subtotal=0; reports.forEach(x=>subtotal+=x.rep.grandTotal);
   const tax=calcTax(subtotal,s.taxRate);
   const total=subtotal+tax;
-  $('grand-v').textContent=reports.length?yen(total):'¥ —';
+  if(reports.length){
+    $('grand-v').innerHTML=yenHTML(lastGrandTotal==null?0:lastGrandTotal);
+    animateYen($('grand-v'),total);
+    lastGrandTotal=total;
+  }else{
+    $('grand-v').textContent='¥ —';
+    lastGrandTotal=null;
+  }
   $('grand-sub').textContent=reports.length?`税抜 ${yen(subtotal)} ＋ 消費税 ${yen(tax)}（${reports.length}名）`:'この期間のデータがありません';
 
   const list=$('sum-list');list.innerHTML='';
@@ -448,7 +795,7 @@ function renderBill(){
         ${rep.totalNightAttendance>0||rep.totalNightWage>0?`<span>夜勤 ${rep.totalNightAttendance}日</span><span>夜間 ${yen(rep.totalNightWage)}</span><span>夜残業 ${yen(rep.totalNightOvertimePay)}</span>`:''}
         <span>車代 ${yen(rep.totalTransportFee)}</span>
       </div>
-      <button class="btn btn-navy btn-sm sum-emp-btn" onclick="makeInvoice('${emp.id}')">📄 ${esc(emp.name)}の請求書PDF</button>`;
+      <button class="btn btn-navy btn-sm sum-emp-btn" onclick="makeInvoice('${emp.id}')">${ICON_DOC}${esc(emp.name)}の請求書PDF</button>`;
     list.appendChild(div);
   });
 }
@@ -638,110 +985,113 @@ function buildInvoiceHTML(reports,period,batch,cssMode){
   return `<style>${css}</style>${page1}${page2}`;
 }
 
+/* 注意: PRINT_CSS と SCREEN_CSS は同時にDOMへ挿入されるため、
+   セレクタは必ず #print-root / #pv-scroll でスコープすること
+   （素の .inv-page 同士だと後勝ちで印刷レイアウトが壊れる） */
 const PRINT_CSS=`
 #print-root{font-family:'Hiragino Mincho ProN','Yu Mincho','Hiragino Kaku Gothic ProN',serif;color:#1c1c1e;background:#fff;}
 #print-root *{margin:0;padding:0;box-sizing:border-box;}
-.inv-page{width:210mm;min-height:297mm;background:#fff;page-break-after:always;position:relative;}
-.inv-page:last-child{page-break-after:auto;}
-.inv-topbar{height:5mm;background:linear-gradient(90deg,#1a2744 0%,#2c3e63 100%);}
-.inv-inner{padding:15mm 17mm 24mm;}
-.inv-sans{font-family:'Hiragino Kaku Gothic ProN','Hiragino Sans','Meiryo',sans-serif;}
-.inv-p1-top{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:11mm;}
-.inv-p1-title{font-size:27pt;letter-spacing:12px;color:#1a2744;font-weight:600;}
-.inv-title-en{font-size:7pt;letter-spacing:5px;color:#9aa0ab;margin-top:1.5mm;font-family:'Hiragino Kaku Gothic ProN',sans-serif;}
-.inv-p1-meta{text-align:right;font-size:8.5pt;color:#555;line-height:1.9;font-family:'Hiragino Kaku Gothic ProN',sans-serif;}
-.inv-p1-meta b{color:#1a2744;}
-.inv-parties{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:9mm;}
-.inv-client-name{font-size:14.5pt;color:#1a2744;border-bottom:1.2pt solid #1a2744;padding-bottom:2.5mm;display:inline-block;min-width:72mm;font-weight:600;}
-.inv-client-detail{font-size:8.5pt;color:#666;margin-top:2.5mm;line-height:1.7;font-family:'Hiragino Kaku Gothic ProN',sans-serif;}
-.inv-p1-issuer{text-align:right;font-family:'Hiragino Kaku Gothic ProN',sans-serif;}
-.inv-p1-issuer-name{font-size:11.5pt;color:#1a2744;font-weight:700;}
-.inv-p1-issuer-detail{font-size:7.5pt;color:#777;line-height:1.7;margin-top:1.5mm;}
-.inv-amount-row{display:flex;align-items:baseline;justify-content:space-between;border-top:1.6pt solid #1a2744;border-bottom:0.5pt solid #d8d8d8;padding:5mm 1mm;margin-bottom:8mm;}
-.inv-total-label{font-size:10.5pt;color:#1a2744;letter-spacing:3px;}
-.inv-total-amount{font-size:26pt;color:#1a2744;font-weight:600;font-family:'Hiragino Sans','Hiragino Kaku Gothic ProN',sans-serif;letter-spacing:0.5px;}
-.inv-total-sub{font-size:7.5pt;color:#999;font-family:'Hiragino Kaku Gothic ProN',sans-serif;margin-left:3mm;}
-.inv-subject{font-size:9.5pt;color:#444;margin-bottom:6mm;font-family:'Hiragino Kaku Gothic ProN',sans-serif;}
-.inv-subject span{color:#999;margin-right:3mm;}
-.inv-page table{width:100%;border-collapse:collapse;margin-bottom:7mm;font-family:'Hiragino Kaku Gothic ProN',sans-serif;}
-.inv-page thead th{font-size:8pt;color:#8890a0;font-weight:600;text-align:right;padding:0 2.5mm 2mm;border-bottom:1.2pt solid #1a2744;letter-spacing:1px;background:none;}
-.inv-page thead th.inv-l{text-align:left;}
-.inv-page thead th.inv-c{text-align:center;}
-.inv-page tbody td{font-size:9pt;color:#333;text-align:right;padding:2.6mm 2.5mm;border-bottom:0.4pt solid #ececec;background:none;}
-.inv-page tbody td.inv-l{text-align:left;}
-.inv-page tbody td.inv-c{text-align:center;}
-.inv-page tr:nth-child(even) td{background:none;}
-.inv-name-cell{color:#1a2744;font-weight:600;}
-.inv-sum-table{max-width:88mm;margin-left:auto;}
-.inv-sum-line td{border:none;padding:1.3mm 2.5mm;font-size:8.5pt;color:#666;}
-.inv-sum-total td{font-size:11.5pt;color:#1a2744;font-weight:700;border-top:1.4pt solid #1a2744;padding-top:2.6mm;border-bottom:none;}
-.inv-bank-box{background:#f7f8fa;border-left:2.2pt solid #1a2744;padding:3.5mm 4.5mm;font-size:8.5pt;color:#444;font-family:'Hiragino Kaku Gothic ProN',sans-serif;line-height:1.8;margin-bottom:7mm;border-radius:0 1mm 1mm 0;}
-.inv-bank-title{font-weight:700;color:#1a2744;letter-spacing:1px;font-size:8.5pt;margin-bottom:1mm;border:none;padding:0;}
-.inv-bank-row{font-size:8.5pt;color:#444;margin-top:0.8mm;}
-.inv-p1-foot{position:absolute;bottom:9mm;left:17mm;right:17mm;display:flex;justify-content:space-between;font-size:7pt;color:#aaa;font-family:'Hiragino Kaku Gothic ProN',sans-serif;border-top:0.4pt solid #eee;padding-top:2mm;}
-.inv-p2-title{font-size:15pt;color:#1a2744;font-weight:600;letter-spacing:4px;margin-bottom:1.5mm;}
-.inv-p2-sub{font-size:8pt;color:#999;font-family:'Hiragino Kaku Gothic ProN',sans-serif;margin-bottom:7mm;padding-bottom:2.5mm;border-bottom:1.2pt solid #1a2744;}
-.inv-emp-block{margin-bottom:8mm;}
-.inv-emp-block-title{font-size:10pt;font-weight:700;color:#1a2744;margin-bottom:2.5mm;font-family:'Hiragino Kaku Gothic ProN',sans-serif;}
-.inv-emp-block-title span{font-size:7.5pt;color:#888;font-weight:normal;margin-left:2mm;}
-.inv-page table.inv-detail thead th{font-size:7.5pt;padding:0 2mm 1.8mm;}
-.inv-page table.inv-detail tbody td{font-size:8pt;padding:1.8mm 2mm;}
-.inv-detail .inv-total-row td{border-top:1.2pt solid #1a2744;border-bottom:none;font-weight:700;color:#1a2744;font-size:8.5pt;background:none!important;padding-top:2.4mm;}
-.inv-night-tag{display:inline-block;font-size:6.5pt;color:#5b46c9;border:0.5pt solid #b9aef0;border-radius:2mm;padding:0.2mm 1.6mm;margin-left:1mm;vertical-align:middle;}
-.inv-bold{font-weight:700;color:#1a2744;}
+#print-root .inv-page{width:210mm;min-height:297mm;background:#fff;page-break-after:always;position:relative;}
+#print-root .inv-page:last-child{page-break-after:auto;}
+#print-root .inv-topbar{height:5mm;background:linear-gradient(90deg,#1a2744 0%,#2c3e63 100%);}
+#print-root .inv-inner{padding:15mm 17mm 24mm;}
+#print-root .inv-sans{font-family:'Hiragino Kaku Gothic ProN','Hiragino Sans','Meiryo',sans-serif;}
+#print-root .inv-p1-top{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:11mm;}
+#print-root .inv-p1-title{font-size:27pt;letter-spacing:12px;color:#1a2744;font-weight:600;}
+#print-root .inv-title-en{font-size:7pt;letter-spacing:5px;color:#9aa0ab;margin-top:1.5mm;font-family:'Hiragino Kaku Gothic ProN',sans-serif;}
+#print-root .inv-p1-meta{text-align:right;font-size:8.5pt;color:#555;line-height:1.9;font-family:'Hiragino Kaku Gothic ProN',sans-serif;}
+#print-root .inv-p1-meta b{color:#1a2744;}
+#print-root .inv-parties{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:9mm;}
+#print-root .inv-client-name{font-size:14.5pt;color:#1a2744;border-bottom:1.2pt solid #1a2744;padding-bottom:2.5mm;display:inline-block;min-width:72mm;font-weight:600;}
+#print-root .inv-client-detail{font-size:8.5pt;color:#666;margin-top:2.5mm;line-height:1.7;font-family:'Hiragino Kaku Gothic ProN',sans-serif;}
+#print-root .inv-p1-issuer{text-align:right;font-family:'Hiragino Kaku Gothic ProN',sans-serif;}
+#print-root .inv-p1-issuer-name{font-size:11.5pt;color:#1a2744;font-weight:700;}
+#print-root .inv-p1-issuer-detail{font-size:7.5pt;color:#777;line-height:1.7;margin-top:1.5mm;}
+#print-root .inv-amount-row{display:flex;align-items:baseline;justify-content:space-between;border-top:1.6pt solid #1a2744;border-bottom:0.5pt solid #d8d8d8;padding:5mm 1mm;margin-bottom:8mm;}
+#print-root .inv-total-label{font-size:10.5pt;color:#1a2744;letter-spacing:3px;}
+#print-root .inv-total-amount{font-size:26pt;color:#1a2744;font-weight:600;font-family:'Hiragino Sans','Hiragino Kaku Gothic ProN',sans-serif;letter-spacing:0.5px;}
+#print-root .inv-total-sub{font-size:7.5pt;color:#999;font-family:'Hiragino Kaku Gothic ProN',sans-serif;margin-left:3mm;}
+#print-root .inv-subject{font-size:9.5pt;color:#444;margin-bottom:6mm;font-family:'Hiragino Kaku Gothic ProN',sans-serif;}
+#print-root .inv-subject span{color:#999;margin-right:3mm;}
+#print-root .inv-page table{width:100%;border-collapse:collapse;margin-bottom:7mm;font-family:'Hiragino Kaku Gothic ProN',sans-serif;}
+#print-root .inv-page thead th{font-size:8pt;color:#8890a0;font-weight:600;text-align:right;padding:0 2.5mm 2mm;border-bottom:1.2pt solid #1a2744;letter-spacing:1px;background:none;}
+#print-root .inv-page thead th.inv-l{text-align:left;}
+#print-root .inv-page thead th.inv-c{text-align:center;}
+#print-root .inv-page tbody td{font-size:9pt;color:#333;text-align:right;padding:2.6mm 2.5mm;border-bottom:0.4pt solid #ececec;background:none;}
+#print-root .inv-page tbody td.inv-l{text-align:left;}
+#print-root .inv-page tbody td.inv-c{text-align:center;}
+#print-root .inv-page tr:nth-child(even) td{background:none;}
+#print-root .inv-name-cell{color:#1a2744;font-weight:600;}
+#print-root .inv-sum-table{max-width:88mm;margin-left:auto;}
+#print-root .inv-sum-line td{border:none;padding:1.3mm 2.5mm;font-size:8.5pt;color:#666;}
+#print-root .inv-sum-total td{font-size:11.5pt;color:#1a2744;font-weight:700;border-top:1.4pt solid #1a2744;padding-top:2.6mm;border-bottom:none;}
+#print-root .inv-bank-box{background:#f7f8fa;border-left:2.2pt solid #1a2744;padding:3.5mm 4.5mm;font-size:8.5pt;color:#444;font-family:'Hiragino Kaku Gothic ProN',sans-serif;line-height:1.8;margin-bottom:7mm;border-radius:0 1mm 1mm 0;}
+#print-root .inv-bank-title{font-weight:700;color:#1a2744;letter-spacing:1px;font-size:8.5pt;margin-bottom:1mm;border:none;padding:0;}
+#print-root .inv-bank-row{font-size:8.5pt;color:#444;margin-top:0.8mm;}
+#print-root .inv-p1-foot{position:absolute;bottom:9mm;left:17mm;right:17mm;display:flex;justify-content:space-between;font-size:7pt;color:#aaa;font-family:'Hiragino Kaku Gothic ProN',sans-serif;border-top:0.4pt solid #eee;padding-top:2mm;}
+#print-root .inv-p2-title{font-size:15pt;color:#1a2744;font-weight:600;letter-spacing:4px;margin-bottom:1.5mm;}
+#print-root .inv-p2-sub{font-size:8pt;color:#999;font-family:'Hiragino Kaku Gothic ProN',sans-serif;margin-bottom:7mm;padding-bottom:2.5mm;border-bottom:1.2pt solid #1a2744;}
+#print-root .inv-emp-block{margin-bottom:8mm;}
+#print-root .inv-emp-block-title{font-size:10pt;font-weight:700;color:#1a2744;margin-bottom:2.5mm;font-family:'Hiragino Kaku Gothic ProN',sans-serif;}
+#print-root .inv-emp-block-title span{font-size:7.5pt;color:#888;font-weight:normal;margin-left:2mm;}
+#print-root .inv-page table.inv-detail thead th{font-size:7.5pt;padding:0 2mm 1.8mm;}
+#print-root .inv-page table.inv-detail tbody td{font-size:8pt;padding:1.8mm 2mm;}
+#print-root .inv-detail .inv-total-row td{border-top:1.2pt solid #1a2744;border-bottom:none;font-weight:700;color:#1a2744;font-size:8.5pt;background:none!important;padding-top:2.4mm;}
+#print-root .inv-night-tag{display:inline-block;font-size:6.5pt;color:#5b46c9;border:0.5pt solid #b9aef0;border-radius:2mm;padding:0.2mm 1.6mm;margin-left:1mm;vertical-align:middle;}
+#print-root .inv-bold{font-weight:700;color:#1a2744;}
 @page{size:A4;margin:0;}
 `;
 
-/* 画面プレビュー用CSS（A4固定をやめ、画面幅にフィット） */
+/* 画面プレビュー用CSS（A4固定をやめ、画面幅にフィット）。全セレクタを #pv-scroll でスコープ */
 const SCREEN_CSS=`
 #pv-scroll *{margin:0;padding:0;box-sizing:border-box;}
 #pv-scroll{font-family:'Hiragino Mincho ProN','Yu Mincho',serif;color:#1c1c1e;}
-.inv-page{width:100%;max-width:760px;min-height:auto;background:#fff;border-radius:4px;box-shadow:0 10px 40px rgba(15,20,40,.35),0 2px 8px rgba(15,20,40,.18);overflow:hidden;}
-.inv-topbar{height:6px;background:linear-gradient(90deg,#1a2744 0%,#2c3e63 100%);}
-.inv-inner{padding:26px 22px 30px;}
-.inv-p1-top{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:26px;gap:10px;}
-.inv-p1-title{font-size:26px;letter-spacing:10px;color:#1a2744;font-weight:600;white-space:nowrap;}
-.inv-title-en{font-size:9px;letter-spacing:4px;color:#9aa0ab;margin-top:4px;font-family:sans-serif;}
-.inv-p1-meta{text-align:right;font-size:10.5px;color:#555;line-height:1.9;font-family:sans-serif;}
-.inv-p1-meta b{color:#1a2744;}
-.inv-parties{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:22px;gap:10px;flex-wrap:wrap;}
-.inv-client-name{font-size:16.5px;color:#1a2744;border-bottom:1.5px solid #1a2744;padding-bottom:7px;display:inline-block;min-width:190px;font-weight:600;}
-.inv-client-detail{font-size:10.5px;color:#666;margin-top:7px;line-height:1.7;font-family:sans-serif;}
-.inv-p1-issuer{text-align:right;font-family:sans-serif;}
-.inv-p1-issuer-name{font-size:13.5px;color:#1a2744;font-weight:700;}
-.inv-p1-issuer-detail{font-size:9.5px;color:#777;line-height:1.7;margin-top:4px;}
-.inv-amount-row{display:flex;align-items:baseline;justify-content:space-between;border-top:2px solid #1a2744;border-bottom:1px solid #d8d8d8;padding:14px 2px;margin-bottom:20px;flex-wrap:wrap;gap:4px;}
-.inv-total-label{font-size:12px;color:#1a2744;letter-spacing:3px;}
-.inv-total-amount{font-size:30px;color:#1a2744;font-weight:600;font-family:'Hiragino Sans',sans-serif;letter-spacing:.5px;}
-.inv-total-sub{font-size:9.5px;color:#999;font-family:sans-serif;margin-left:8px;}
-.inv-subject{font-size:11.5px;color:#444;margin-bottom:16px;font-family:sans-serif;}
-.inv-subject span{color:#999;margin-right:8px;}
-.inv-page table{width:100%;border-collapse:collapse;margin-bottom:18px;font-family:sans-serif;}
-.inv-page thead th{font-size:9.5px;color:#8890a0;font-weight:600;text-align:right;padding:0 7px 6px;border-bottom:1.5px solid #1a2744;letter-spacing:1px;background:none;}
-.inv-page thead th.inv-l{text-align:left;}
-.inv-page thead th.inv-c{text-align:center;}
-.inv-page tbody td{font-size:11px;color:#333;text-align:right;padding:8px 7px;border-bottom:1px solid #ececec;background:none;}
-.inv-page tbody td.inv-l{text-align:left;}
-.inv-page tbody td.inv-c{text-align:center;}
-.inv-page tr:nth-child(even) td{background:none;}
-.inv-name-cell{color:#1a2744;font-weight:600;}
-.inv-sum-table{max-width:320px;margin-left:auto;}
-.inv-sum-line td{border:none;padding:4px 7px;font-size:10.5px;color:#666;}
-.inv-sum-total td{font-size:14px;color:#1a2744;font-weight:700;border-top:1.6px solid #1a2744;padding-top:8px;border-bottom:none;}
-.inv-bank-box{background:#f7f8fa;border-left:3px solid #1a2744;padding:11px 13px;font-size:10.5px;color:#444;font-family:sans-serif;line-height:1.8;margin-bottom:16px;border-radius:0 3px 3px 0;}
-.inv-bank-title{font-weight:700;color:#1a2744;letter-spacing:1px;font-size:10.5px;margin-bottom:3px;border:none;padding:0;}
-.inv-bank-row{font-size:10.5px;color:#444;margin-top:2px;}
-.inv-p1-foot{display:flex;justify-content:space-between;font-size:9px;color:#aaa;font-family:sans-serif;border-top:1px solid #eee;padding-top:8px;margin-top:10px;}
-.inv-p2-title{font-size:17px;color:#1a2744;font-weight:600;letter-spacing:4px;margin-bottom:4px;}
-.inv-p2-sub{font-size:10px;color:#999;font-family:sans-serif;margin-bottom:16px;padding-bottom:7px;border-bottom:1.5px solid #1a2744;}
-.inv-emp-block{margin-bottom:20px;}
-.inv-emp-block-title{font-size:12.5px;font-weight:700;color:#1a2744;margin-bottom:7px;font-family:sans-serif;}
-.inv-emp-block-title span{font-size:9.5px;color:#888;font-weight:normal;margin-left:6px;}
-.inv-page table.inv-detail thead th{font-size:9px;padding:0 5px 5px;}
-.inv-page table.inv-detail tbody td{font-size:9.5px;padding:5.5px 5px;}
-.inv-detail .inv-total-row td{border-top:1.5px solid #1a2744;border-bottom:none;font-weight:700;color:#1a2744;font-size:10.5px;background:none!important;padding-top:7px;}
-.inv-night-tag{display:inline-block;font-size:8px;color:#5b46c9;border:1px solid #b9aef0;border-radius:6px;padding:0 5px;margin-left:4px;vertical-align:middle;}
-.inv-bold{font-weight:700;color:#1a2744;}
+#pv-scroll .inv-page{width:100%;max-width:760px;min-height:auto;background:#fff;border-radius:4px;box-shadow:0 10px 40px rgba(15,20,40,.35),0 2px 8px rgba(15,20,40,.18);overflow:hidden;}
+#pv-scroll .inv-topbar{height:6px;background:linear-gradient(90deg,#1a2744 0%,#2c3e63 100%);}
+#pv-scroll .inv-inner{padding:26px 22px 30px;}
+#pv-scroll .inv-p1-top{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:26px;gap:10px;}
+#pv-scroll .inv-p1-title{font-size:26px;letter-spacing:10px;color:#1a2744;font-weight:600;white-space:nowrap;}
+#pv-scroll .inv-title-en{font-size:9px;letter-spacing:4px;color:#9aa0ab;margin-top:4px;font-family:sans-serif;}
+#pv-scroll .inv-p1-meta{text-align:right;font-size:10.5px;color:#555;line-height:1.9;font-family:sans-serif;}
+#pv-scroll .inv-p1-meta b{color:#1a2744;}
+#pv-scroll .inv-parties{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:22px;gap:10px;flex-wrap:wrap;}
+#pv-scroll .inv-client-name{font-size:16.5px;color:#1a2744;border-bottom:1.5px solid #1a2744;padding-bottom:7px;display:inline-block;min-width:190px;font-weight:600;}
+#pv-scroll .inv-client-detail{font-size:10.5px;color:#666;margin-top:7px;line-height:1.7;font-family:sans-serif;}
+#pv-scroll .inv-p1-issuer{text-align:right;font-family:sans-serif;}
+#pv-scroll .inv-p1-issuer-name{font-size:13.5px;color:#1a2744;font-weight:700;}
+#pv-scroll .inv-p1-issuer-detail{font-size:9.5px;color:#777;line-height:1.7;margin-top:4px;}
+#pv-scroll .inv-amount-row{display:flex;align-items:baseline;justify-content:space-between;border-top:2px solid #1a2744;border-bottom:1px solid #d8d8d8;padding:14px 2px;margin-bottom:20px;flex-wrap:wrap;gap:4px;}
+#pv-scroll .inv-total-label{font-size:12px;color:#1a2744;letter-spacing:3px;}
+#pv-scroll .inv-total-amount{font-size:30px;color:#1a2744;font-weight:600;font-family:'Hiragino Sans',sans-serif;letter-spacing:.5px;}
+#pv-scroll .inv-total-sub{font-size:9.5px;color:#999;font-family:sans-serif;margin-left:8px;}
+#pv-scroll .inv-subject{font-size:11.5px;color:#444;margin-bottom:16px;font-family:sans-serif;}
+#pv-scroll .inv-subject span{color:#999;margin-right:8px;}
+#pv-scroll .inv-page table{width:100%;border-collapse:collapse;margin-bottom:18px;font-family:sans-serif;}
+#pv-scroll .inv-page thead th{font-size:9.5px;color:#8890a0;font-weight:600;text-align:right;padding:0 7px 6px;border-bottom:1.5px solid #1a2744;letter-spacing:1px;background:none;}
+#pv-scroll .inv-page thead th.inv-l{text-align:left;}
+#pv-scroll .inv-page thead th.inv-c{text-align:center;}
+#pv-scroll .inv-page tbody td{font-size:11px;color:#333;text-align:right;padding:8px 7px;border-bottom:1px solid #ececec;background:none;}
+#pv-scroll .inv-page tbody td.inv-l{text-align:left;}
+#pv-scroll .inv-page tbody td.inv-c{text-align:center;}
+#pv-scroll .inv-page tr:nth-child(even) td{background:none;}
+#pv-scroll .inv-name-cell{color:#1a2744;font-weight:600;}
+#pv-scroll .inv-sum-table{max-width:320px;margin-left:auto;}
+#pv-scroll .inv-sum-line td{border:none;padding:4px 7px;font-size:10.5px;color:#666;}
+#pv-scroll .inv-sum-total td{font-size:14px;color:#1a2744;font-weight:700;border-top:1.6px solid #1a2744;padding-top:8px;border-bottom:none;}
+#pv-scroll .inv-bank-box{background:#f7f8fa;border-left:3px solid #1a2744;padding:11px 13px;font-size:10.5px;color:#444;font-family:sans-serif;line-height:1.8;margin-bottom:16px;border-radius:0 3px 3px 0;}
+#pv-scroll .inv-bank-title{font-weight:700;color:#1a2744;letter-spacing:1px;font-size:10.5px;margin-bottom:3px;border:none;padding:0;}
+#pv-scroll .inv-bank-row{font-size:10.5px;color:#444;margin-top:2px;}
+#pv-scroll .inv-p1-foot{display:flex;justify-content:space-between;font-size:9px;color:#aaa;font-family:sans-serif;border-top:1px solid #eee;padding-top:8px;margin-top:10px;}
+#pv-scroll .inv-p2-title{font-size:17px;color:#1a2744;font-weight:600;letter-spacing:4px;margin-bottom:4px;}
+#pv-scroll .inv-p2-sub{font-size:10px;color:#999;font-family:sans-serif;margin-bottom:16px;padding-bottom:7px;border-bottom:1.5px solid #1a2744;}
+#pv-scroll .inv-emp-block{margin-bottom:20px;}
+#pv-scroll .inv-emp-block-title{font-size:12.5px;font-weight:700;color:#1a2744;margin-bottom:7px;font-family:sans-serif;}
+#pv-scroll .inv-emp-block-title span{font-size:9.5px;color:#888;font-weight:normal;margin-left:6px;}
+#pv-scroll .inv-page table.inv-detail thead th{font-size:9px;padding:0 5px 5px;}
+#pv-scroll .inv-page table.inv-detail tbody td{font-size:9.5px;padding:5.5px 5px;}
+#pv-scroll .inv-detail .inv-total-row td{border-top:1.5px solid #1a2744;border-bottom:none;font-weight:700;color:#1a2744;font-size:10.5px;background:none!important;padding-top:7px;}
+#pv-scroll .inv-night-tag{display:inline-block;font-size:8px;color:#5b46c9;border:1px solid #b9aef0;border-radius:6px;padding:0 5px;margin-left:4px;vertical-align:middle;}
+#pv-scroll .inv-bold{font-weight:700;color:#1a2744;}
 `;
 
 /* ===== 設定タブ ===== */
@@ -781,7 +1131,7 @@ function renderSettingsLists(){
   if(!STATE.employees.length){list.innerHTML='<div style="font-size:.82rem;color:var(--mut);padding:4px 0;">従業員が登録されていません</div>';return;}
   STATE.employees.forEach(e=>{
     const div=document.createElement('div');div.className='edititem';
-    div.innerHTML=`<span class="ei-name">${esc(e.name)}</span><span class="ei-wage">${yen(e.dailyWage)}</span><button onclick="openEmpModal('${e.id}')">✏️</button>`;
+    div.innerHTML=`<span class="ei-name">${esc(e.name)}</span><span class="ei-wage">${yen(e.dailyWage)}</span><button onclick="openEmpModal('${e.id}')" aria-label="編集"><svg class="ic" viewBox="0 0 24 24" style="width:17px;height:17px;"><path d="M4 20h4.2L19.5 8.7a2.1 2.1 0 0 0 0-3l-1.2-1.2a2.1 2.1 0 0 0-3 0L4 15.8V20z"/><path d="M13.8 6l4.2 4.2"/></svg></button>`;
     list.appendChild(div);
   });
 }
