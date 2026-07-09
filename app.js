@@ -37,6 +37,8 @@ let selEmp=null;       // 勤怠タブで選択中のemployeeId
 let nightExpanded=new Set(); // その月で夜勤欄を開いている日付
 let manualExpanded=new Set(); // 合計手入力欄を開いている日付
 let billY=new Date().getFullYear(), billM=new Date().getMonth()+1; // 請求タブの請求月
+let lastRunTotal=null;   // runbarカウントアップの前回値
+let lastGrandTotal=null; // 請求合計カウントアップの前回値
 let editEmpId=null;    // モーダル編集対象
 
 const saveEmployees=()=>idbSet('employees',STATE.employees);
@@ -49,6 +51,25 @@ function $(id){return document.getElementById(id);}
 function toast(m){const e=$('toast');e.textContent=m;e.classList.add('show');clearTimeout(e._t);e._t=setTimeout(()=>e.classList.remove('show'),2200);}
 function haptic(){try{$('hapticLbl').click();}catch(e){}}
 function yen(n){return '¥'+Math.round(n||0).toLocaleString('ja-JP');}
+/* 金額の装飾マークアップ（¥を小さく・数字を太く） */
+function yenHTML(n){return `<span class="mo"><span class="mo-y">¥</span><span class="mo-v">${Math.round(n||0).toLocaleString('ja-JP')}</span></span>`;}
+/* 金額カウントアップ。el内の .mo-v（無ければel自身）のテキストを to までアニメーション */
+function animateYen(el,to){
+  if(!el)return;
+  const v=el.querySelector('.mo-v')||el;
+  const target=Math.round(to||0);
+  const from=parseInt((v.textContent||'0').replace(/[^\d-]/g,''),10)||0;
+  const fin=()=>{v.textContent=target.toLocaleString('ja-JP');};
+  if(from===target||matchMedia('(prefers-reduced-motion: reduce)').matches){fin();return;}
+  const t0=performance.now(),dur=550;
+  (function step(t){
+    const p=Math.min(1,(t-t0)/dur),e=1-Math.pow(1-p,3);
+    v.textContent=Math.round(from+(target-from)*e).toLocaleString('ja-JP');
+    if(p<1)requestAnimationFrame(step);else fin();
+  })(t0);
+}
+/* SVGアイコン（ボタン用） */
+const ICON_DOC='<svg class="ic" viewBox="0 0 24 24"><path d="M6.5 2.8h7.2L18.5 7.6v12.1a1.5 1.5 0 0 1-1.5 1.5H6.5A1.5 1.5 0 0 1 5 19.7V4.3a1.5 1.5 0 0 1 1.5-1.5z"/><path d="M13.6 2.8v4.9h4.9"/><path d="M8.5 13h7M8.5 16.5h4.5"/></svg>';
 function pad2(n){return String(n).padStart(2,'0');}
 function ymd(y,m,d){return `${y}-${pad2(m)}-${pad2(d)}`;}
 function fmtDateJ(s){const d=new Date(s+'T00:00:00');return `${d.getFullYear()}年${d.getMonth()+1}月${d.getDate()}日`;}
@@ -284,8 +305,11 @@ function renderAtt(){
   html+='</div>';
 
   const cheer=runTotal===0?'今月はこれから':runTotal<100000?'コツコツ積み上げ中':runTotal<300000?'今月もお疲れさま':'おっ、いい月だ';
-  html+=`<div class="runbar"><div><div class="rl">${viewY}年${viewM}月 合計（暦月）</div><div class="rcheer">${cheer}</div></div><span class="rv">${yen(runTotal)}</span></div>`;
+  const seed=(lastRunTotal==null)?0:lastRunTotal;
+  html+=`<div class="runbar"><div><div class="rl">${viewY}年${viewM}月 合計（暦月）</div><div class="rcheer">${cheer}</div></div><span class="rv" id="run-v">${yenHTML(seed)}</span></div>`;
   body.innerHTML=html;
+  animateYen($('run-v'),runTotal);
+  lastRunTotal=runTotal;
 }
 
 function setAtt(date,field,value){
@@ -427,7 +451,14 @@ function renderBill(){
   let subtotal=0; reports.forEach(x=>subtotal+=x.rep.grandTotal);
   const tax=calcTax(subtotal,s.taxRate);
   const total=subtotal+tax;
-  $('grand-v').textContent=reports.length?yen(total):'¥ —';
+  if(reports.length){
+    $('grand-v').innerHTML=yenHTML(lastGrandTotal==null?0:lastGrandTotal);
+    animateYen($('grand-v'),total);
+    lastGrandTotal=total;
+  }else{
+    $('grand-v').textContent='¥ —';
+    lastGrandTotal=null;
+  }
   $('grand-sub').textContent=reports.length?`税抜 ${yen(subtotal)} ＋ 消費税 ${yen(tax)}（${reports.length}名）`:'この期間のデータがありません';
 
   const list=$('sum-list');list.innerHTML='';
@@ -448,7 +479,7 @@ function renderBill(){
         ${rep.totalNightAttendance>0||rep.totalNightWage>0?`<span>夜勤 ${rep.totalNightAttendance}日</span><span>夜間 ${yen(rep.totalNightWage)}</span><span>夜残業 ${yen(rep.totalNightOvertimePay)}</span>`:''}
         <span>車代 ${yen(rep.totalTransportFee)}</span>
       </div>
-      <button class="btn btn-navy btn-sm sum-emp-btn" onclick="makeInvoice('${emp.id}')">📄 ${esc(emp.name)}の請求書PDF</button>`;
+      <button class="btn btn-navy btn-sm sum-emp-btn" onclick="makeInvoice('${emp.id}')">${ICON_DOC}${esc(emp.name)}の請求書PDF</button>`;
     list.appendChild(div);
   });
 }
@@ -638,110 +669,113 @@ function buildInvoiceHTML(reports,period,batch,cssMode){
   return `<style>${css}</style>${page1}${page2}`;
 }
 
+/* 注意: PRINT_CSS と SCREEN_CSS は同時にDOMへ挿入されるため、
+   セレクタは必ず #print-root / #pv-scroll でスコープすること
+   （素の .inv-page 同士だと後勝ちで印刷レイアウトが壊れる） */
 const PRINT_CSS=`
 #print-root{font-family:'Hiragino Mincho ProN','Yu Mincho','Hiragino Kaku Gothic ProN',serif;color:#1c1c1e;background:#fff;}
 #print-root *{margin:0;padding:0;box-sizing:border-box;}
-.inv-page{width:210mm;min-height:297mm;background:#fff;page-break-after:always;position:relative;}
-.inv-page:last-child{page-break-after:auto;}
-.inv-topbar{height:5mm;background:linear-gradient(90deg,#1a2744 0%,#2c3e63 100%);}
-.inv-inner{padding:15mm 17mm 24mm;}
-.inv-sans{font-family:'Hiragino Kaku Gothic ProN','Hiragino Sans','Meiryo',sans-serif;}
-.inv-p1-top{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:11mm;}
-.inv-p1-title{font-size:27pt;letter-spacing:12px;color:#1a2744;font-weight:600;}
-.inv-title-en{font-size:7pt;letter-spacing:5px;color:#9aa0ab;margin-top:1.5mm;font-family:'Hiragino Kaku Gothic ProN',sans-serif;}
-.inv-p1-meta{text-align:right;font-size:8.5pt;color:#555;line-height:1.9;font-family:'Hiragino Kaku Gothic ProN',sans-serif;}
-.inv-p1-meta b{color:#1a2744;}
-.inv-parties{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:9mm;}
-.inv-client-name{font-size:14.5pt;color:#1a2744;border-bottom:1.2pt solid #1a2744;padding-bottom:2.5mm;display:inline-block;min-width:72mm;font-weight:600;}
-.inv-client-detail{font-size:8.5pt;color:#666;margin-top:2.5mm;line-height:1.7;font-family:'Hiragino Kaku Gothic ProN',sans-serif;}
-.inv-p1-issuer{text-align:right;font-family:'Hiragino Kaku Gothic ProN',sans-serif;}
-.inv-p1-issuer-name{font-size:11.5pt;color:#1a2744;font-weight:700;}
-.inv-p1-issuer-detail{font-size:7.5pt;color:#777;line-height:1.7;margin-top:1.5mm;}
-.inv-amount-row{display:flex;align-items:baseline;justify-content:space-between;border-top:1.6pt solid #1a2744;border-bottom:0.5pt solid #d8d8d8;padding:5mm 1mm;margin-bottom:8mm;}
-.inv-total-label{font-size:10.5pt;color:#1a2744;letter-spacing:3px;}
-.inv-total-amount{font-size:26pt;color:#1a2744;font-weight:600;font-family:'Hiragino Sans','Hiragino Kaku Gothic ProN',sans-serif;letter-spacing:0.5px;}
-.inv-total-sub{font-size:7.5pt;color:#999;font-family:'Hiragino Kaku Gothic ProN',sans-serif;margin-left:3mm;}
-.inv-subject{font-size:9.5pt;color:#444;margin-bottom:6mm;font-family:'Hiragino Kaku Gothic ProN',sans-serif;}
-.inv-subject span{color:#999;margin-right:3mm;}
-.inv-page table{width:100%;border-collapse:collapse;margin-bottom:7mm;font-family:'Hiragino Kaku Gothic ProN',sans-serif;}
-.inv-page thead th{font-size:8pt;color:#8890a0;font-weight:600;text-align:right;padding:0 2.5mm 2mm;border-bottom:1.2pt solid #1a2744;letter-spacing:1px;background:none;}
-.inv-page thead th.inv-l{text-align:left;}
-.inv-page thead th.inv-c{text-align:center;}
-.inv-page tbody td{font-size:9pt;color:#333;text-align:right;padding:2.6mm 2.5mm;border-bottom:0.4pt solid #ececec;background:none;}
-.inv-page tbody td.inv-l{text-align:left;}
-.inv-page tbody td.inv-c{text-align:center;}
-.inv-page tr:nth-child(even) td{background:none;}
-.inv-name-cell{color:#1a2744;font-weight:600;}
-.inv-sum-table{max-width:88mm;margin-left:auto;}
-.inv-sum-line td{border:none;padding:1.3mm 2.5mm;font-size:8.5pt;color:#666;}
-.inv-sum-total td{font-size:11.5pt;color:#1a2744;font-weight:700;border-top:1.4pt solid #1a2744;padding-top:2.6mm;border-bottom:none;}
-.inv-bank-box{background:#f7f8fa;border-left:2.2pt solid #1a2744;padding:3.5mm 4.5mm;font-size:8.5pt;color:#444;font-family:'Hiragino Kaku Gothic ProN',sans-serif;line-height:1.8;margin-bottom:7mm;border-radius:0 1mm 1mm 0;}
-.inv-bank-title{font-weight:700;color:#1a2744;letter-spacing:1px;font-size:8.5pt;margin-bottom:1mm;border:none;padding:0;}
-.inv-bank-row{font-size:8.5pt;color:#444;margin-top:0.8mm;}
-.inv-p1-foot{position:absolute;bottom:9mm;left:17mm;right:17mm;display:flex;justify-content:space-between;font-size:7pt;color:#aaa;font-family:'Hiragino Kaku Gothic ProN',sans-serif;border-top:0.4pt solid #eee;padding-top:2mm;}
-.inv-p2-title{font-size:15pt;color:#1a2744;font-weight:600;letter-spacing:4px;margin-bottom:1.5mm;}
-.inv-p2-sub{font-size:8pt;color:#999;font-family:'Hiragino Kaku Gothic ProN',sans-serif;margin-bottom:7mm;padding-bottom:2.5mm;border-bottom:1.2pt solid #1a2744;}
-.inv-emp-block{margin-bottom:8mm;}
-.inv-emp-block-title{font-size:10pt;font-weight:700;color:#1a2744;margin-bottom:2.5mm;font-family:'Hiragino Kaku Gothic ProN',sans-serif;}
-.inv-emp-block-title span{font-size:7.5pt;color:#888;font-weight:normal;margin-left:2mm;}
-.inv-page table.inv-detail thead th{font-size:7.5pt;padding:0 2mm 1.8mm;}
-.inv-page table.inv-detail tbody td{font-size:8pt;padding:1.8mm 2mm;}
-.inv-detail .inv-total-row td{border-top:1.2pt solid #1a2744;border-bottom:none;font-weight:700;color:#1a2744;font-size:8.5pt;background:none!important;padding-top:2.4mm;}
-.inv-night-tag{display:inline-block;font-size:6.5pt;color:#5b46c9;border:0.5pt solid #b9aef0;border-radius:2mm;padding:0.2mm 1.6mm;margin-left:1mm;vertical-align:middle;}
-.inv-bold{font-weight:700;color:#1a2744;}
+#print-root .inv-page{width:210mm;min-height:297mm;background:#fff;page-break-after:always;position:relative;}
+#print-root .inv-page:last-child{page-break-after:auto;}
+#print-root .inv-topbar{height:5mm;background:linear-gradient(90deg,#1a2744 0%,#2c3e63 100%);}
+#print-root .inv-inner{padding:15mm 17mm 24mm;}
+#print-root .inv-sans{font-family:'Hiragino Kaku Gothic ProN','Hiragino Sans','Meiryo',sans-serif;}
+#print-root .inv-p1-top{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:11mm;}
+#print-root .inv-p1-title{font-size:27pt;letter-spacing:12px;color:#1a2744;font-weight:600;}
+#print-root .inv-title-en{font-size:7pt;letter-spacing:5px;color:#9aa0ab;margin-top:1.5mm;font-family:'Hiragino Kaku Gothic ProN',sans-serif;}
+#print-root .inv-p1-meta{text-align:right;font-size:8.5pt;color:#555;line-height:1.9;font-family:'Hiragino Kaku Gothic ProN',sans-serif;}
+#print-root .inv-p1-meta b{color:#1a2744;}
+#print-root .inv-parties{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:9mm;}
+#print-root .inv-client-name{font-size:14.5pt;color:#1a2744;border-bottom:1.2pt solid #1a2744;padding-bottom:2.5mm;display:inline-block;min-width:72mm;font-weight:600;}
+#print-root .inv-client-detail{font-size:8.5pt;color:#666;margin-top:2.5mm;line-height:1.7;font-family:'Hiragino Kaku Gothic ProN',sans-serif;}
+#print-root .inv-p1-issuer{text-align:right;font-family:'Hiragino Kaku Gothic ProN',sans-serif;}
+#print-root .inv-p1-issuer-name{font-size:11.5pt;color:#1a2744;font-weight:700;}
+#print-root .inv-p1-issuer-detail{font-size:7.5pt;color:#777;line-height:1.7;margin-top:1.5mm;}
+#print-root .inv-amount-row{display:flex;align-items:baseline;justify-content:space-between;border-top:1.6pt solid #1a2744;border-bottom:0.5pt solid #d8d8d8;padding:5mm 1mm;margin-bottom:8mm;}
+#print-root .inv-total-label{font-size:10.5pt;color:#1a2744;letter-spacing:3px;}
+#print-root .inv-total-amount{font-size:26pt;color:#1a2744;font-weight:600;font-family:'Hiragino Sans','Hiragino Kaku Gothic ProN',sans-serif;letter-spacing:0.5px;}
+#print-root .inv-total-sub{font-size:7.5pt;color:#999;font-family:'Hiragino Kaku Gothic ProN',sans-serif;margin-left:3mm;}
+#print-root .inv-subject{font-size:9.5pt;color:#444;margin-bottom:6mm;font-family:'Hiragino Kaku Gothic ProN',sans-serif;}
+#print-root .inv-subject span{color:#999;margin-right:3mm;}
+#print-root .inv-page table{width:100%;border-collapse:collapse;margin-bottom:7mm;font-family:'Hiragino Kaku Gothic ProN',sans-serif;}
+#print-root .inv-page thead th{font-size:8pt;color:#8890a0;font-weight:600;text-align:right;padding:0 2.5mm 2mm;border-bottom:1.2pt solid #1a2744;letter-spacing:1px;background:none;}
+#print-root .inv-page thead th.inv-l{text-align:left;}
+#print-root .inv-page thead th.inv-c{text-align:center;}
+#print-root .inv-page tbody td{font-size:9pt;color:#333;text-align:right;padding:2.6mm 2.5mm;border-bottom:0.4pt solid #ececec;background:none;}
+#print-root .inv-page tbody td.inv-l{text-align:left;}
+#print-root .inv-page tbody td.inv-c{text-align:center;}
+#print-root .inv-page tr:nth-child(even) td{background:none;}
+#print-root .inv-name-cell{color:#1a2744;font-weight:600;}
+#print-root .inv-sum-table{max-width:88mm;margin-left:auto;}
+#print-root .inv-sum-line td{border:none;padding:1.3mm 2.5mm;font-size:8.5pt;color:#666;}
+#print-root .inv-sum-total td{font-size:11.5pt;color:#1a2744;font-weight:700;border-top:1.4pt solid #1a2744;padding-top:2.6mm;border-bottom:none;}
+#print-root .inv-bank-box{background:#f7f8fa;border-left:2.2pt solid #1a2744;padding:3.5mm 4.5mm;font-size:8.5pt;color:#444;font-family:'Hiragino Kaku Gothic ProN',sans-serif;line-height:1.8;margin-bottom:7mm;border-radius:0 1mm 1mm 0;}
+#print-root .inv-bank-title{font-weight:700;color:#1a2744;letter-spacing:1px;font-size:8.5pt;margin-bottom:1mm;border:none;padding:0;}
+#print-root .inv-bank-row{font-size:8.5pt;color:#444;margin-top:0.8mm;}
+#print-root .inv-p1-foot{position:absolute;bottom:9mm;left:17mm;right:17mm;display:flex;justify-content:space-between;font-size:7pt;color:#aaa;font-family:'Hiragino Kaku Gothic ProN',sans-serif;border-top:0.4pt solid #eee;padding-top:2mm;}
+#print-root .inv-p2-title{font-size:15pt;color:#1a2744;font-weight:600;letter-spacing:4px;margin-bottom:1.5mm;}
+#print-root .inv-p2-sub{font-size:8pt;color:#999;font-family:'Hiragino Kaku Gothic ProN',sans-serif;margin-bottom:7mm;padding-bottom:2.5mm;border-bottom:1.2pt solid #1a2744;}
+#print-root .inv-emp-block{margin-bottom:8mm;}
+#print-root .inv-emp-block-title{font-size:10pt;font-weight:700;color:#1a2744;margin-bottom:2.5mm;font-family:'Hiragino Kaku Gothic ProN',sans-serif;}
+#print-root .inv-emp-block-title span{font-size:7.5pt;color:#888;font-weight:normal;margin-left:2mm;}
+#print-root .inv-page table.inv-detail thead th{font-size:7.5pt;padding:0 2mm 1.8mm;}
+#print-root .inv-page table.inv-detail tbody td{font-size:8pt;padding:1.8mm 2mm;}
+#print-root .inv-detail .inv-total-row td{border-top:1.2pt solid #1a2744;border-bottom:none;font-weight:700;color:#1a2744;font-size:8.5pt;background:none!important;padding-top:2.4mm;}
+#print-root .inv-night-tag{display:inline-block;font-size:6.5pt;color:#5b46c9;border:0.5pt solid #b9aef0;border-radius:2mm;padding:0.2mm 1.6mm;margin-left:1mm;vertical-align:middle;}
+#print-root .inv-bold{font-weight:700;color:#1a2744;}
 @page{size:A4;margin:0;}
 `;
 
-/* 画面プレビュー用CSS（A4固定をやめ、画面幅にフィット） */
+/* 画面プレビュー用CSS（A4固定をやめ、画面幅にフィット）。全セレクタを #pv-scroll でスコープ */
 const SCREEN_CSS=`
 #pv-scroll *{margin:0;padding:0;box-sizing:border-box;}
 #pv-scroll{font-family:'Hiragino Mincho ProN','Yu Mincho',serif;color:#1c1c1e;}
-.inv-page{width:100%;max-width:760px;min-height:auto;background:#fff;border-radius:4px;box-shadow:0 10px 40px rgba(15,20,40,.35),0 2px 8px rgba(15,20,40,.18);overflow:hidden;}
-.inv-topbar{height:6px;background:linear-gradient(90deg,#1a2744 0%,#2c3e63 100%);}
-.inv-inner{padding:26px 22px 30px;}
-.inv-p1-top{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:26px;gap:10px;}
-.inv-p1-title{font-size:26px;letter-spacing:10px;color:#1a2744;font-weight:600;white-space:nowrap;}
-.inv-title-en{font-size:9px;letter-spacing:4px;color:#9aa0ab;margin-top:4px;font-family:sans-serif;}
-.inv-p1-meta{text-align:right;font-size:10.5px;color:#555;line-height:1.9;font-family:sans-serif;}
-.inv-p1-meta b{color:#1a2744;}
-.inv-parties{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:22px;gap:10px;flex-wrap:wrap;}
-.inv-client-name{font-size:16.5px;color:#1a2744;border-bottom:1.5px solid #1a2744;padding-bottom:7px;display:inline-block;min-width:190px;font-weight:600;}
-.inv-client-detail{font-size:10.5px;color:#666;margin-top:7px;line-height:1.7;font-family:sans-serif;}
-.inv-p1-issuer{text-align:right;font-family:sans-serif;}
-.inv-p1-issuer-name{font-size:13.5px;color:#1a2744;font-weight:700;}
-.inv-p1-issuer-detail{font-size:9.5px;color:#777;line-height:1.7;margin-top:4px;}
-.inv-amount-row{display:flex;align-items:baseline;justify-content:space-between;border-top:2px solid #1a2744;border-bottom:1px solid #d8d8d8;padding:14px 2px;margin-bottom:20px;flex-wrap:wrap;gap:4px;}
-.inv-total-label{font-size:12px;color:#1a2744;letter-spacing:3px;}
-.inv-total-amount{font-size:30px;color:#1a2744;font-weight:600;font-family:'Hiragino Sans',sans-serif;letter-spacing:.5px;}
-.inv-total-sub{font-size:9.5px;color:#999;font-family:sans-serif;margin-left:8px;}
-.inv-subject{font-size:11.5px;color:#444;margin-bottom:16px;font-family:sans-serif;}
-.inv-subject span{color:#999;margin-right:8px;}
-.inv-page table{width:100%;border-collapse:collapse;margin-bottom:18px;font-family:sans-serif;}
-.inv-page thead th{font-size:9.5px;color:#8890a0;font-weight:600;text-align:right;padding:0 7px 6px;border-bottom:1.5px solid #1a2744;letter-spacing:1px;background:none;}
-.inv-page thead th.inv-l{text-align:left;}
-.inv-page thead th.inv-c{text-align:center;}
-.inv-page tbody td{font-size:11px;color:#333;text-align:right;padding:8px 7px;border-bottom:1px solid #ececec;background:none;}
-.inv-page tbody td.inv-l{text-align:left;}
-.inv-page tbody td.inv-c{text-align:center;}
-.inv-page tr:nth-child(even) td{background:none;}
-.inv-name-cell{color:#1a2744;font-weight:600;}
-.inv-sum-table{max-width:320px;margin-left:auto;}
-.inv-sum-line td{border:none;padding:4px 7px;font-size:10.5px;color:#666;}
-.inv-sum-total td{font-size:14px;color:#1a2744;font-weight:700;border-top:1.6px solid #1a2744;padding-top:8px;border-bottom:none;}
-.inv-bank-box{background:#f7f8fa;border-left:3px solid #1a2744;padding:11px 13px;font-size:10.5px;color:#444;font-family:sans-serif;line-height:1.8;margin-bottom:16px;border-radius:0 3px 3px 0;}
-.inv-bank-title{font-weight:700;color:#1a2744;letter-spacing:1px;font-size:10.5px;margin-bottom:3px;border:none;padding:0;}
-.inv-bank-row{font-size:10.5px;color:#444;margin-top:2px;}
-.inv-p1-foot{display:flex;justify-content:space-between;font-size:9px;color:#aaa;font-family:sans-serif;border-top:1px solid #eee;padding-top:8px;margin-top:10px;}
-.inv-p2-title{font-size:17px;color:#1a2744;font-weight:600;letter-spacing:4px;margin-bottom:4px;}
-.inv-p2-sub{font-size:10px;color:#999;font-family:sans-serif;margin-bottom:16px;padding-bottom:7px;border-bottom:1.5px solid #1a2744;}
-.inv-emp-block{margin-bottom:20px;}
-.inv-emp-block-title{font-size:12.5px;font-weight:700;color:#1a2744;margin-bottom:7px;font-family:sans-serif;}
-.inv-emp-block-title span{font-size:9.5px;color:#888;font-weight:normal;margin-left:6px;}
-.inv-page table.inv-detail thead th{font-size:9px;padding:0 5px 5px;}
-.inv-page table.inv-detail tbody td{font-size:9.5px;padding:5.5px 5px;}
-.inv-detail .inv-total-row td{border-top:1.5px solid #1a2744;border-bottom:none;font-weight:700;color:#1a2744;font-size:10.5px;background:none!important;padding-top:7px;}
-.inv-night-tag{display:inline-block;font-size:8px;color:#5b46c9;border:1px solid #b9aef0;border-radius:6px;padding:0 5px;margin-left:4px;vertical-align:middle;}
-.inv-bold{font-weight:700;color:#1a2744;}
+#pv-scroll .inv-page{width:100%;max-width:760px;min-height:auto;background:#fff;border-radius:4px;box-shadow:0 10px 40px rgba(15,20,40,.35),0 2px 8px rgba(15,20,40,.18);overflow:hidden;}
+#pv-scroll .inv-topbar{height:6px;background:linear-gradient(90deg,#1a2744 0%,#2c3e63 100%);}
+#pv-scroll .inv-inner{padding:26px 22px 30px;}
+#pv-scroll .inv-p1-top{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:26px;gap:10px;}
+#pv-scroll .inv-p1-title{font-size:26px;letter-spacing:10px;color:#1a2744;font-weight:600;white-space:nowrap;}
+#pv-scroll .inv-title-en{font-size:9px;letter-spacing:4px;color:#9aa0ab;margin-top:4px;font-family:sans-serif;}
+#pv-scroll .inv-p1-meta{text-align:right;font-size:10.5px;color:#555;line-height:1.9;font-family:sans-serif;}
+#pv-scroll .inv-p1-meta b{color:#1a2744;}
+#pv-scroll .inv-parties{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:22px;gap:10px;flex-wrap:wrap;}
+#pv-scroll .inv-client-name{font-size:16.5px;color:#1a2744;border-bottom:1.5px solid #1a2744;padding-bottom:7px;display:inline-block;min-width:190px;font-weight:600;}
+#pv-scroll .inv-client-detail{font-size:10.5px;color:#666;margin-top:7px;line-height:1.7;font-family:sans-serif;}
+#pv-scroll .inv-p1-issuer{text-align:right;font-family:sans-serif;}
+#pv-scroll .inv-p1-issuer-name{font-size:13.5px;color:#1a2744;font-weight:700;}
+#pv-scroll .inv-p1-issuer-detail{font-size:9.5px;color:#777;line-height:1.7;margin-top:4px;}
+#pv-scroll .inv-amount-row{display:flex;align-items:baseline;justify-content:space-between;border-top:2px solid #1a2744;border-bottom:1px solid #d8d8d8;padding:14px 2px;margin-bottom:20px;flex-wrap:wrap;gap:4px;}
+#pv-scroll .inv-total-label{font-size:12px;color:#1a2744;letter-spacing:3px;}
+#pv-scroll .inv-total-amount{font-size:30px;color:#1a2744;font-weight:600;font-family:'Hiragino Sans',sans-serif;letter-spacing:.5px;}
+#pv-scroll .inv-total-sub{font-size:9.5px;color:#999;font-family:sans-serif;margin-left:8px;}
+#pv-scroll .inv-subject{font-size:11.5px;color:#444;margin-bottom:16px;font-family:sans-serif;}
+#pv-scroll .inv-subject span{color:#999;margin-right:8px;}
+#pv-scroll .inv-page table{width:100%;border-collapse:collapse;margin-bottom:18px;font-family:sans-serif;}
+#pv-scroll .inv-page thead th{font-size:9.5px;color:#8890a0;font-weight:600;text-align:right;padding:0 7px 6px;border-bottom:1.5px solid #1a2744;letter-spacing:1px;background:none;}
+#pv-scroll .inv-page thead th.inv-l{text-align:left;}
+#pv-scroll .inv-page thead th.inv-c{text-align:center;}
+#pv-scroll .inv-page tbody td{font-size:11px;color:#333;text-align:right;padding:8px 7px;border-bottom:1px solid #ececec;background:none;}
+#pv-scroll .inv-page tbody td.inv-l{text-align:left;}
+#pv-scroll .inv-page tbody td.inv-c{text-align:center;}
+#pv-scroll .inv-page tr:nth-child(even) td{background:none;}
+#pv-scroll .inv-name-cell{color:#1a2744;font-weight:600;}
+#pv-scroll .inv-sum-table{max-width:320px;margin-left:auto;}
+#pv-scroll .inv-sum-line td{border:none;padding:4px 7px;font-size:10.5px;color:#666;}
+#pv-scroll .inv-sum-total td{font-size:14px;color:#1a2744;font-weight:700;border-top:1.6px solid #1a2744;padding-top:8px;border-bottom:none;}
+#pv-scroll .inv-bank-box{background:#f7f8fa;border-left:3px solid #1a2744;padding:11px 13px;font-size:10.5px;color:#444;font-family:sans-serif;line-height:1.8;margin-bottom:16px;border-radius:0 3px 3px 0;}
+#pv-scroll .inv-bank-title{font-weight:700;color:#1a2744;letter-spacing:1px;font-size:10.5px;margin-bottom:3px;border:none;padding:0;}
+#pv-scroll .inv-bank-row{font-size:10.5px;color:#444;margin-top:2px;}
+#pv-scroll .inv-p1-foot{display:flex;justify-content:space-between;font-size:9px;color:#aaa;font-family:sans-serif;border-top:1px solid #eee;padding-top:8px;margin-top:10px;}
+#pv-scroll .inv-p2-title{font-size:17px;color:#1a2744;font-weight:600;letter-spacing:4px;margin-bottom:4px;}
+#pv-scroll .inv-p2-sub{font-size:10px;color:#999;font-family:sans-serif;margin-bottom:16px;padding-bottom:7px;border-bottom:1.5px solid #1a2744;}
+#pv-scroll .inv-emp-block{margin-bottom:20px;}
+#pv-scroll .inv-emp-block-title{font-size:12.5px;font-weight:700;color:#1a2744;margin-bottom:7px;font-family:sans-serif;}
+#pv-scroll .inv-emp-block-title span{font-size:9.5px;color:#888;font-weight:normal;margin-left:6px;}
+#pv-scroll .inv-page table.inv-detail thead th{font-size:9px;padding:0 5px 5px;}
+#pv-scroll .inv-page table.inv-detail tbody td{font-size:9.5px;padding:5.5px 5px;}
+#pv-scroll .inv-detail .inv-total-row td{border-top:1.5px solid #1a2744;border-bottom:none;font-weight:700;color:#1a2744;font-size:10.5px;background:none!important;padding-top:7px;}
+#pv-scroll .inv-night-tag{display:inline-block;font-size:8px;color:#5b46c9;border:1px solid #b9aef0;border-radius:6px;padding:0 5px;margin-left:4px;vertical-align:middle;}
+#pv-scroll .inv-bold{font-weight:700;color:#1a2744;}
 `;
 
 /* ===== 設定タブ ===== */
@@ -781,7 +815,7 @@ function renderSettingsLists(){
   if(!STATE.employees.length){list.innerHTML='<div style="font-size:.82rem;color:var(--mut);padding:4px 0;">従業員が登録されていません</div>';return;}
   STATE.employees.forEach(e=>{
     const div=document.createElement('div');div.className='edititem';
-    div.innerHTML=`<span class="ei-name">${esc(e.name)}</span><span class="ei-wage">${yen(e.dailyWage)}</span><button onclick="openEmpModal('${e.id}')">✏️</button>`;
+    div.innerHTML=`<span class="ei-name">${esc(e.name)}</span><span class="ei-wage">${yen(e.dailyWage)}</span><button onclick="openEmpModal('${e.id}')" aria-label="編集"><svg class="ic" viewBox="0 0 24 24" style="width:17px;height:17px;"><path d="M4 20h4.2L19.5 8.7a2.1 2.1 0 0 0 0-3l-1.2-1.2a2.1 2.1 0 0 0-3 0L4 15.8V20z"/><path d="M13.8 6l4.2 4.2"/></svg></button>`;
     list.appendChild(div);
   });
 }
