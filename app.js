@@ -171,6 +171,7 @@ async function boot(){
   if(STATE.employees.length) selEmp=STATE.employees[0].id;
   setTimeout(()=>$('splash').classList.add('hide'),700);
   renderAll();
+  switchTab('home');
 }
 function mergeSettings(s){
   return {...DEFAULT_SETTINGS,...s,
@@ -197,12 +198,15 @@ function switchTab(t){
   document.querySelectorAll('.tb').forEach(b=>b.classList.remove('active'));
   $('page-'+t).classList.add('active');
   $('tb-'+t).classList.add('active');
-  const cfg={att:['日給管理','ATTENDANCE',true],bill:['請求','INVOICE',false],set:['設定','SETTINGS',false]};
+  const cfg={home:['ホーム','DASHBOARD',false],att:['日給管理','ATTENDANCE',true],bill:['請求','INVOICE',false],set:['設定','SETTINGS',false]};
   $('ph-name').textContent=cfg[t][0]; $('ph-sub').textContent=cfg[t][1];
   $('ph-month').style.display=cfg[t][2]?'flex':'none';
+  if(t==='home')renderDash();
   if(t==='bill')renderBill();
   if(t==='set')renderSettingsLists();
 }
+window.switchTab=switchTab;
+$('tb-home').addEventListener('click',()=>switchTab('home'));
 $('tb-att').addEventListener('click',()=>switchTab('att'));
 $('tb-bill').addEventListener('click',()=>switchTab('bill'));
 $('tb-set').addEventListener('click',()=>switchTab('set'));
@@ -214,6 +218,160 @@ function updateHeaderMonth(){$('hm-label').textContent=`${viewY}年${viewM}月`;
 
 /* ---------- RENDER ALL ---------- */
 function renderAll(){updateHeaderMonth();renderEmpRow();renderAtt();}
+
+/* ===== ホーム（ダッシュボード） ===== */
+const CHART_BLUE='#3f5fa7', CHART_AMBER='#d97e06'; // 配色はCVD/コントラスト検証済み
+function monthKey(ds){return ds.slice(0,7);}
+function monthTotalsMap(){
+  const map=new Map(); // 'YYYY-MM' -> 合計
+  STATE.records.forEach(r=>{
+    if(!recHasData(r))return;
+    const emp=STATE.employees.find(e=>e.id===r.employeeId);
+    if(!emp)return;
+    const k=monthKey(r.date);
+    map.set(k,(map.get(k)||0)+dailyTotal(r,emp).total);
+  });
+  return map;
+}
+/* 万単位の短い表記（軸ラベル・統計タイル用） */
+function fmtMan(v){
+  v=Math.round(v||0);
+  if(v===0)return '0';
+  if(v<10000)return v.toLocaleString('ja-JP');
+  const man=v/10000;
+  return (man>=100?Math.round(man):Math.round(man*10)/10)+'万';
+}
+function niceCeil(v){
+  if(v<=0)return 1;
+  const p=Math.pow(10,Math.floor(Math.log10(v)));
+  const n=v/p;
+  const f=n<=1?1:n<=2?2:n<=2.5?2.5:n<=5?5:10;
+  return f*p;
+}
+/* 上端だけ角丸・ベースラインは直角のバー */
+function barPath(x,y,w,h,r){
+  if(h<=0)return '';
+  r=Math.min(r,h,w/2);
+  const x2=x+w,yb=y+h;
+  return `M${x} ${yb} L${x} ${y+r} Q${x} ${y} ${x+r} ${y} L${x2-r} ${y} Q${x2} ${y} ${x2} ${y+r} L${x2} ${yb} Z`;
+}
+let dashMonths=[]; // 直近12ヶ月 [{key,y,m,total}]
+function buildBarChart(){
+  const W=344,H=170,padL=34,padR=6,padT=16,padB=18;
+  const plotW=W-padL-padR,plotH=H-padT-padB;
+  const yMax=niceCeil(Math.max(...dashMonths.map(m=>m.total),1));
+  const ys=v=>padT+plotH-(v/yMax*plotH);
+  const bandW=plotW/12;
+  const barW=Math.min(20,bandW-6);
+  let grid='',bars='',labels='',hits='';
+  [0,yMax/2,yMax].forEach(t=>{
+    const y=ys(t);
+    grid+=`<line x1="${padL}" y1="${y}" x2="${W-padR}" y2="${y}" stroke="#e7ebf2" stroke-width="1"/>`;
+    grid+=`<text x="${padL-5}" y="${y+3}" text-anchor="end" font-size="8.5" fill="#97a0af">${fmtMan(t)}</text>`;
+  });
+  dashMonths.forEach((m,i)=>{
+    const x=padL+i*bandW+(bandW-barW)/2;
+    const h=m.total/yMax*plotH;
+    const y=padT+plotH-h;
+    const curM=(i===11);
+    if(m.total>0)
+      bars+=`<path class="bar" style="animation-delay:${i*35}ms" d="${barPath(x,y,barW,h,4)}" fill="${curM?CHART_AMBER:CHART_BLUE}"/>`;
+    labels+=`<text x="${padL+i*bandW+bandW/2}" y="${H-5}" text-anchor="middle" font-size="8.5" fill="${curM?'#5d6675':'#97a0af'}" font-weight="${curM?'700':'400'}">${m.m}月</text>`;
+    if(curM&&m.total>0)
+      labels+=`<text x="${padL+i*bandW+bandW/2}" y="${y-5}" text-anchor="middle" font-size="9.5" font-weight="700" fill="#5d6675">${fmtMan(m.total)}</text>`;
+    hits+=`<rect x="${padL+i*bandW}" y="${padT}" width="${bandW}" height="${plotH}" fill="transparent" onclick="dashTip(${i})"/>`;
+  });
+  return `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="月別売上の棒グラフ"><g>${grid}</g><g class="bars">${bars}</g><g>${labels}</g><g>${hits}</g></svg>`;
+}
+let dashTipTimer=null;
+function dashTip(i){
+  const m=dashMonths[i];const tip=$('dash-tip');
+  if(!m||!tip)return;
+  const W=344,padL=34,padR=6;
+  const bandW=(W-padL-padR)/12;
+  const cx=(padL+i*bandW+bandW/2)/W*100;
+  tip.textContent=`${m.y}年${m.m}月 ${yen(m.total)}`;
+  tip.style.left=Math.min(86,Math.max(14,cx))+'%';
+  tip.classList.add('show');
+  haptic();
+  clearTimeout(dashTipTimer);
+  dashTipTimer=setTimeout(()=>tip.classList.remove('show'),2200);
+}
+window.dashTip=dashTip;
+function renderDash(){
+  const body=$('dash-body');
+  if(!body)return;
+  if(!STATE.employees.length){
+    body.innerHTML=`<div class="card"><div class="empty">まだデータがありません<br>従業員を登録して勤怠をつけると<br>ここに売上ダッシュボードが表示されます</div>
+      <button class="btn btn-navy" onclick="switchTab('att')">勤怠をつけはじめる</button></div>`;
+    return;
+  }
+  const now=new Date();const Y=now.getFullYear(),M=now.getMonth()+1;
+  const totals=monthTotalsMap();
+  dashMonths=[];
+  for(let back=11;back>=0;back--){
+    const d=new Date(Y,M-1-back,1);
+    const y=d.getFullYear(),m=d.getMonth()+1;
+    const k=`${y}-${pad2(m)}`;
+    dashMonths.push({key:k,y,m,total:totals.get(k)||0});
+  }
+  const cur=dashMonths[11].total;
+  const prev=dashMonths[10].total;
+  let badge;
+  if(prev>0&&cur>0){
+    const pct=Math.round((cur-prev)/prev*100);
+    badge=pct>0?`<span class="dh-badge up">▲ +${pct}%</span>`
+      :pct<0?`<span class="dh-badge down">▼ ${pct}%</span>`
+      :`<span class="dh-badge flat">± 0%</span>`;
+  }else{
+    badge=`<span class="dh-badge flat">先月比 —</span>`;
+  }
+  // 今月の統計＋累計
+  const km=`${Y}-${pad2(M)}`;
+  let att=0,otH=0,cum=0;const days=new Set();
+  STATE.records.forEach(r=>{
+    if(!recHasData(r))return;
+    const emp=STATE.employees.find(e=>e.id===r.employeeId);
+    if(!emp)return;
+    cum+=dailyTotal(r,emp).total;
+    if(monthKey(r.date)!==km)return;
+    att+=(r.attendance||0)+(r.nightAttendance||0);
+    otH+=(r.overtimeHours||0)+(r.nightOvertimeHours||0);
+    days.add(r.date);
+  });
+  const avg=days.size?Math.round(cur/days.size):0;
+  // 従業員別（今月・暦月）
+  const perEmp=STATE.employees
+    .map(e=>({name:e.name,total:periodReport(e,`${km}-01`,`${km}-${pad2(new Date(Y,M,0).getDate())}`).grandTotal}))
+    .filter(x=>x.total>0).sort((a,b)=>b.total-a.total);
+  const maxEmp=perEmp.length?perEmp[0].total:0;
+
+  body.innerHTML=`
+    <div class="dash-hero">
+      <div class="dh-l">今月の売上（${Y}年${M}月・暦月）</div>
+      <div class="dh-v" id="dash-v">${yenHTML(0)}</div>
+      <div class="dh-row">${badge}<span class="dh-sub">先月 ${yen(prev)}</span></div>
+    </div>
+    <div class="stat-grid">
+      <div class="stat"><div class="stat-l">出勤（人工）</div><div class="stat-v">${att}<small>人工</small></div></div>
+      <div class="stat"><div class="stat-l">残業時間</div><div class="stat-v">${otH}<small>h</small></div></div>
+      <div class="stat"><div class="stat-l">稼働日の平均</div><div class="stat-v">${fmtMan(avg)}<small>円/日</small></div></div>
+      <div class="stat"><div class="stat-l">これまでの累計</div><div class="stat-v">${fmtMan(cum)}<small>円</small></div></div>
+    </div>
+    <div class="card">
+      <div class="card-t">月別売上（直近12ヶ月）</div>
+      <div class="chart-wrap">${buildBarChart()}<div class="chart-tip" id="dash-tip"></div></div>
+    </div>
+    <div class="card">
+      <div class="card-t">従業員別（今月）</div>
+      ${perEmp.length?perEmp.map(x=>`
+        <div class="eb-row"><div class="eb-name">${esc(x.name)}</div>
+        <div class="eb-track"><div class="eb-fill" style="width:${maxEmp?Math.round(x.total/maxEmp*100):0}%"></div></div>
+        <div class="eb-val">${yen(x.total)}</div></div>`).join('')
+      :'<div style="font-size:var(--fs-sm);color:var(--mut);">今月の勤怠データはまだありません</div>'}
+    </div>`;
+  animateYen($('dash-v'),cur);
+}
 
 /* ===== 勤怠タブ ===== */
 function renderEmpRow(){

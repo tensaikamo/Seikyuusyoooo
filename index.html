@@ -236,6 +236,42 @@ select{background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/
 .grand-v{font-size:2.15rem;font-weight:800;letter-spacing:.01em;line-height:1.1;}
 .grand-sub{font-size:var(--fs-sm);opacity:.72;margin-top:8px;}
 
+/* ===== DASHBOARD ===== */
+.dash-hero{position:relative;overflow:hidden;background:var(--grad-hero);color:#fff;border-radius:18px;padding:20px 18px 18px;margin-bottom:12px;box-shadow:var(--shadow-md);}
+.dash-hero::before{content:'¥';position:absolute;right:-10px;top:-38px;font-size:9.5rem;font-weight:800;color:rgba(255,255,255,.05);line-height:1;pointer-events:none;}
+.dash-hero::after{content:'';position:absolute;inset:0;background:radial-gradient(120% 100% at 88% -12%,rgba(122,150,255,.3),transparent 55%);pointer-events:none;}
+.dash-hero>*{position:relative;z-index:1;}
+.dh-l{font-size:var(--fs-xs);opacity:.75;letter-spacing:.12em;margin-bottom:8px;}
+.dh-v{font-size:2.3rem;font-weight:800;line-height:1.1;font-variant-numeric:normal;font-feature-settings:normal;}
+.dh-row{display:flex;align-items:center;gap:9px;margin-top:9px;flex-wrap:wrap;}
+.dh-badge{display:inline-flex;align-items:center;gap:4px;font-size:var(--fs-sm);font-weight:800;border-radius:8px;padding:3px 9px;background:rgba(255,255,255,.14);}
+.dh-badge.up{color:#8de8b0;}
+.dh-badge.down{color:#f3aca3;}
+.dh-badge.flat{color:rgba(255,255,255,.75);}
+.dh-sub{font-size:var(--fs-xs);opacity:.7;}
+.chart-wrap{position:relative;}
+.chart-wrap svg{display:block;width:100%;height:auto;}
+.bars .bar{transform-box:fill-box;transform-origin:bottom;animation:barUp .55s var(--ease) backwards;}
+@keyframes barUp{from{transform:scaleY(0);}to{transform:scaleY(1);}}
+.chart-tip{position:absolute;top:0;transform:translateX(-50%);background:rgba(15,27,51,.94);color:#fff;font-size:var(--fs-xs);font-weight:700;padding:5px 10px;border-radius:8px;white-space:nowrap;pointer-events:none;opacity:0;transition:opacity var(--dur-1);box-shadow:0 6px 16px rgba(0,0,0,.25);}
+.chart-tip.show{opacity:1;}
+.stat-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px;}
+.stat{background:var(--surface);border:1px solid rgba(15,27,51,.05);border-radius:var(--r);padding:13px 14px;box-shadow:var(--shadow-sm);}
+.stat-l{font-size:var(--fs-xs);color:var(--mut);font-weight:700;letter-spacing:.04em;}
+.stat-v{font-size:1.3rem;font-weight:800;margin-top:3px;line-height:1.2;font-variant-numeric:normal;font-feature-settings:normal;}
+.stat-v small{font-size:.62em;font-weight:700;color:var(--sub);margin-left:1px;}
+.stat-s{font-size:var(--fs-xs);color:var(--sub);margin-top:2px;}
+.eb-row{display:flex;align-items:center;gap:10px;}
+.eb-row+.eb-row{margin-top:11px;}
+.eb-name{width:62px;font-size:var(--fs-sm);font-weight:700;flex-shrink:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.eb-track{flex:1;height:14px;background:#e4eaf5;border-radius:4px;overflow:hidden;}
+.eb-fill{height:100%;background:#3f5fa7;border-radius:0 4px 4px 0;animation:ebGrow .6s var(--ease) backwards;}
+.eb-row:nth-child(2) .eb-fill{animation-delay:.07s;}
+.eb-row:nth-child(3) .eb-fill{animation-delay:.14s;}
+.eb-row:nth-child(n+4) .eb-fill{animation-delay:.2s;}
+@keyframes ebGrow{from{width:0;}}
+.eb-val{width:78px;text-align:right;font-size:var(--fs-sm);font-weight:700;flex-shrink:0;color:var(--ink);}
+
 /* ===== SETTINGS ===== */
 .editlist{display:flex;flex-direction:column;gap:7px;margin-bottom:10px;}
 .edititem{display:flex;align-items:center;gap:8px;background:#f6f8fb;border:1px solid var(--line);border-radius:10px;padding:9px 12px;}
@@ -309,8 +345,13 @@ select{background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/
 
 <div class="pages">
 
+  <!-- ===== ホーム（ダッシュボード） ===== -->
+  <section class="page active" id="page-home">
+    <div class="sc" id="dash-body"></div>
+  </section>
+
   <!-- ===== 勤怠入力 ===== -->
-  <section class="page active" id="page-att">
+  <section class="page" id="page-att">
     <div class="sc">
       <div class="emp-row" id="emp-row"></div>
       <div id="att-body"></div>
@@ -411,7 +452,8 @@ select{background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/
 
 <!-- TAB BAR -->
 <nav class="tabbar">
-  <button class="tb active" id="tb-att" type="button"><svg class="ic" viewBox="0 0 24 24"><rect x="4.5" y="4.6" width="15" height="16.6" rx="2.6"/><path d="M9 2.6h6a1.1 1.1 0 0 1 1.1 1.1v1.4H7.9V3.7A1.1 1.1 0 0 1 9 2.6z"/><path d="M8.5 11h7M8.5 15h4.5"/></svg><span>勤怠</span></button>
+  <button class="tb active" id="tb-home" type="button"><svg class="ic" viewBox="0 0 24 24"><path d="M3.5 10.8 12 3.5l8.5 7.3"/><path d="M5.6 9.2v9.9a1.4 1.4 0 0 0 1.4 1.4h10a1.4 1.4 0 0 0 1.4-1.4V9.2"/><path d="M9.6 20.5v-5.4a1.2 1.2 0 0 1 1.2-1.2h2.4a1.2 1.2 0 0 1 1.2 1.2v5.4"/></svg><span>ホーム</span></button>
+  <button class="tb" id="tb-att" type="button"><svg class="ic" viewBox="0 0 24 24"><rect x="4.5" y="4.6" width="15" height="16.6" rx="2.6"/><path d="M9 2.6h6a1.1 1.1 0 0 1 1.1 1.1v1.4H7.9V3.7A1.1 1.1 0 0 1 9 2.6z"/><path d="M8.5 11h7M8.5 15h4.5"/></svg><span>勤怠</span></button>
   <button class="tb" id="tb-bill" type="button"><svg class="ic" viewBox="0 0 24 24"><path d="M6.5 2.8h7.2L18.5 7.6v12.1a1.5 1.5 0 0 1-1.5 1.5H6.5A1.5 1.5 0 0 1 5 19.7V4.3a1.5 1.5 0 0 1 1.5-1.5z"/><path d="M13.6 2.8v4.9h4.9"/><path d="M9.7 11.2l2.3 2.9 2.3-2.9M12 14.1v3.3M10.2 15.4h3.6"/></svg><span>請求</span></button>
   <button class="tb" id="tb-set" type="button"><svg class="ic" viewBox="0 0 24 24"><path d="M4 7.3h16M4 12h16M4 16.7h16"/><circle cx="9.5" cy="7.3" r="2.1" fill="#fff"/><circle cx="15" cy="12" r="2.1" fill="#fff"/><circle cx="7.5" cy="16.7" r="2.1" fill="#fff"/></svg><span>設定</span></button>
 </nav>
