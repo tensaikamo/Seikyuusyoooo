@@ -204,6 +204,33 @@ select{background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/
 .day-total.ovr{color:var(--amber-d);}
 .ovr-tag{display:inline-block;font-size:.6rem;font-weight:800;color:#fff;background:var(--amber-d);border-radius:4px;padding:1px 5px;margin-right:6px;vertical-align:middle;}
 
+/* ===== 表示切替（リスト⇄カレンダー） ===== */
+.seg{display:flex;background:#e6eaf2;border-radius:11px;padding:3px;margin-bottom:11px;}
+.seg-b{flex:1;min-height:36px;border:none;background:transparent;border-radius:9px;font-size:var(--fs-sm);font-weight:700;color:var(--sub);cursor:pointer;transition:all var(--dur-1);}
+.seg-b.sel{background:#fff;color:var(--navy);box-shadow:var(--shadow-sm);}
+
+/* ===== カレンダー ===== */
+.cal-week{display:grid;grid-template-columns:repeat(7,1fr);text-align:center;font-size:var(--fs-xs);color:var(--mut);font-weight:700;margin-bottom:6px;}
+.cal-week .sun{color:var(--danger);}
+.cal-week .sat{color:#2563eb;}
+.cal-grid{display:grid;grid-template-columns:repeat(7,1fr);gap:4px;}
+.cal-cell{position:relative;min-height:52px;border:none;background:#f4f6fa;border-radius:9px;cursor:pointer;display:flex;flex-direction:column;align-items:center;justify-content:flex-start;padding:6px 1px 3px;gap:2px;transition:transform var(--dur-1) var(--snap);font-family:inherit;}
+.cal-cell:active{transform:scale(.93);}
+.cal-cell.blank{background:transparent;pointer-events:none;}
+.cal-d{font-size:var(--fs-sm);font-weight:800;line-height:1;color:var(--ink);}
+.cal-cell.sun .cal-d{color:var(--danger);}
+.cal-cell.sat .cal-d{color:#2563eb;}
+.cal-cell.today{outline:2px solid var(--amber);outline-offset:-2px;}
+.cal-dots{display:flex;gap:2px;}
+i.dot-day,i.dot-night{width:5px;height:5px;border-radius:50%;display:inline-block;}
+i.dot-day{background:#3f5fa7;}
+i.dot-night{background:var(--night);}
+.cal-hol{font-size:.5rem;color:var(--danger);line-height:1.1;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding:0 1px;}
+.cal-leg{display:flex;align-items:center;gap:12px;margin-top:11px;font-size:var(--fs-xs);color:var(--sub);flex-wrap:wrap;}
+.cal-leg span{display:inline-flex;align-items:center;gap:4px;}
+.cal-leg-hm{width:44px;height:8px;border-radius:4px;background:linear-gradient(90deg,rgba(63,95,167,.08),rgba(63,95,167,.5));}
+.dhol{font-size:.52rem;color:var(--danger);line-height:1.2;margin-top:1px;}
+
 /* running total bar */
 .runbar{
   position:sticky;bottom:0;background:var(--grad-hero);color:#fff;border-radius:16px;
@@ -472,6 +499,18 @@ select{background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/
     <div id="emp-ot-hint" style="font-size:.74rem;color:var(--sub);margin-bottom:14px;"></div>
     <button class="btn btn-navy" id="emp-save" type="button">保存</button>
     <button class="btn btn-danger btn-sm" id="emp-delete" type="button" style="margin-top:9px;display:none;">この従業員を削除</button>
+  </div>
+</div>
+
+<!-- DAY EDIT SHEET（カレンダーのセルタップで開く） -->
+<div class="modal-bg" id="day-modal">
+  <div class="modal">
+    <div class="grab"></div>
+    <div class="modal-h">
+      <div class="modal-title" id="day-modal-title">—</div>
+      <button class="modal-close" id="day-modal-close" type="button">✕</button>
+    </div>
+    <div id="day-sheet-body"></div>
   </div>
 </div>
 

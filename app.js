@@ -105,6 +105,66 @@ function recHasData(r){
          (r.transportFee||0)>0||(Number(r.manualTotal)>0);
 }
 function daysInMonthList(y,m){const out=[];const d=new Date(y,m-1,1);while(d.getMonth()===m-1){out.push(ymd(d.getFullYear(),d.getMonth()+1,d.getDate()));d.setDate(d.getDate()+1);}return out;}
+
+/* ---------- 日本の祝日（依存ゼロ・計算で算出 / 2000〜2099年） ---------- */
+const _holCache={};
+function holidaysOfYear(y){
+  if(_holCache[y])return _holCache[y];
+  const map={};
+  const add=(m,d,name)=>{map[m+'-'+d]=name;};
+  const nthMon=(m,n)=>{const first=new Date(y,m-1,1).getDay();return 1+((8-first)%7)+(n-1)*7;};
+  add(1,1,'元日');
+  add(1,nthMon(1,2),'成人の日');
+  add(2,11,'建国記念の日');
+  if(y>=2020)add(2,23,'天皇誕生日');else if(y<=2018)add(12,23,'天皇誕生日');
+  add(3,Math.floor(20.8431+0.242194*(y-1980)-Math.floor((y-1980)/4)),'春分の日');
+  add(4,29,y>=2007?'昭和の日':'みどりの日');
+  add(5,3,'憲法記念日');
+  if(y>=2007)add(5,4,'みどりの日');
+  add(5,5,'こどもの日');
+  if(y===2020)add(7,23,'海の日');else if(y===2021)add(7,22,'海の日');
+  else if(y>=2003)add(7,nthMon(7,3),'海の日');else add(7,20,'海の日');
+  if(y===2020)add(8,10,'山の日');else if(y===2021)add(8,8,'山の日');
+  else if(y>=2016)add(8,11,'山の日');
+  if(y>=2003)add(9,nthMon(9,3),'敬老の日');else add(9,15,'敬老の日');
+  add(9,Math.floor(23.2488+0.242194*(y-1980)-Math.floor((y-1980)/4)),'秋分の日');
+  if(y===2020)add(7,24,'スポーツの日');else if(y===2021)add(7,23,'スポーツの日');
+  else add(10,nthMon(10,2),y>=2020?'スポーツの日':'体育の日');
+  add(11,3,'文化の日');
+  add(11,23,'勤労感謝の日');
+  const isH=(m,d)=>!!map[m+'-'+d];
+  // 国民の休日（前日も翌日も祝日の平日）
+  const extra=[];
+  for(let m=1;m<=12;m++){
+    const dim=new Date(y,m,0).getDate();
+    for(let d=1;d<=dim;d++){
+      if(isH(m,d))continue;
+      const dt=new Date(y,m-1,d);
+      if(dt.getDay()===0)continue;
+      const pv=new Date(y,m-1,d-1),nx=new Date(y,m-1,d+1);
+      if(pv.getFullYear()===y&&nx.getFullYear()===y&&isH(pv.getMonth()+1,pv.getDate())&&isH(nx.getMonth()+1,nx.getDate()))
+        extra.push([m,d]);
+    }
+  }
+  extra.forEach(([m,d])=>add(m,d,'国民の休日'));
+  // 振替休日（日曜の祝日 → 次の非祝日）
+  const subs=[];
+  for(let m=1;m<=12;m++){
+    const dim=new Date(y,m,0).getDate();
+    for(let d=1;d<=dim;d++){
+      if(!isH(m,d))continue;
+      if(new Date(y,m-1,d).getDay()!==0)continue;
+      let nd=new Date(y,m-1,d+1);
+      while(isH(nd.getMonth()+1,nd.getDate()))nd=new Date(nd.getFullYear(),nd.getMonth(),nd.getDate()+1);
+      if(nd.getFullYear()===y)subs.push([nd.getMonth()+1,nd.getDate()]);
+    }
+  }
+  subs.forEach(([m,d])=>add(m,d,'振替休日'));
+  _holCache[y]=map;
+  return map;
+}
+/** 祝日名（祝日でなければ null） */
+function jpHoliday(y,m,d){return holidaysOfYear(y)[m+'-'+d]||null;}
 function daysInPeriod(start,end){const out=[];const c=new Date(start+'T00:00:00'),e=new Date(end+'T00:00:00');while(c<=e){out.push(ymd(c.getFullYear(),c.getMonth()+1,c.getDate()));c.setDate(c.getDate()+1);}return out;}
 
 /** 締め日から請求期間を計算（closingDay>=29は月末締め） */
@@ -389,47 +449,21 @@ function renderEmpRow(){
   row.appendChild(add);
 }
 
-function renderAtt(){
-  updateHeaderMonth();
-  const body=$('att-body');
-  const emp=STATE.employees.find(e=>e.id===selEmp);
-  if(!emp){
-    body.innerHTML='<div class="empty">従業員がいません<br>上の「＋ 追加」から登録してください</div>';
-    return;
-  }
-  const days=daysInMonthList(viewY,viewM);
-  const recMap=new Map();
-  STATE.records.forEach(r=>{if(r.employeeId===emp.id)recMap.set(r.date,r);});
-  const otRate=overtimeRate(emp.dailyWage);
+let attView='list'; // 'list' | 'cal'
+function setAttView(v){attView=v;haptic();renderAtt();}
+window.setAttView=setAttView;
 
-  let runTotal=0;
-  const otRateN=overtimeRate(emp.nightWage||0);
+function blankRec(){return {attendance:0,overtimeHours:0,nightAttendance:0,nightOvertimeHours:0,transportFee:0};}
+
+/* 1日分の入力コントロール（リスト行と日別シートで共用） */
+function dayControlsHTML(ds,rec,emp){
+  const t=dailyTotal(rec,emp);
+  const has=recHasData(rec);
   const nightEnabled=(emp.nightWage||0)>0;
-  let html=`<div class="card" style="padding:13px 14px;">
-    <div class="att-head">
-      <div><div class="att-emp">${esc(emp.name)}</div>
-      <div class="att-meta">日給 ${yen(emp.dailyWage)}　残業 ${yen(Math.round(otRate))}/h${nightEnabled?`<br>夜間 ${yen(emp.nightWage)}　夜残業 ${yen(Math.round(otRateN))}/h`:''}</div></div>
-      <button class="btn btn-ghost btn-sm" style="width:auto;" onclick="openEmpModal('${emp.id}')">編集</button>
-    </div>
-    <div class="bulk-row">
-      <button class="bulk-b" onclick="bulkFill('weekday')">平日を1で埋める</button>
-      <button class="bulk-b danger" onclick="bulkFill('clear')">この月をクリア</button>
-    </div></div>`;
-
-  html+='<div class="day-list">';
-  days.forEach(ds=>{
-    const d=new Date(ds+'T00:00:00');const dow=d.getDay();
-    const rec=recMap.get(ds)||{attendance:0,overtimeHours:0,nightAttendance:0,nightOvertimeHours:0,transportFee:0};
-    const t=dailyTotal(rec,emp);
-    const has=recHasData(rec);
-    if(has)runTotal+=t.total;
-    const hasNight=(rec.nightAttendance>0||rec.nightOvertimeHours>0);
-    const showNight=nightEnabled&&(hasNight||nightExpanded.has(ds));
-    const cls=['day'];if(rec.attendance>0||hasNight)cls.push('work');if(dow===0)cls.push('weekend');if(dow===6)cls.push('sat');
-    const attOpts=[0.5,1,1.5,2];
-    html+=`<div class="${cls.join(' ')}">
-      <div class="dcell-l"><div class="dnum">${d.getDate()}</div><div class="ddow">${WEEK[dow]}</div></div>
-      <div class="dcell-r">
+  const hasNight=(rec.nightAttendance>0||rec.nightOvertimeHours>0);
+  const showNight=nightEnabled&&(hasNight||nightExpanded.has(ds));
+  const attOpts=[0.5,1,1.5,2];
+  return `
         <div class="shift-label">日勤</div>
         <div class="att-btns">
           <button class="att-b${rec.attendance===0?' sel':''}" onclick="setAtt('${ds}','attendance',0)">休</button>
@@ -456,11 +490,101 @@ function renderAtt(){
           <div class="att-mini"><label>合計を手入力</label><input type="number" inputmode="numeric" value="${rec.manualTotal||''}" placeholder="自動計算" onchange="setAtt('${ds}','manualTotal',this.value)"></div>
           ${t.overridden?`<button class="manual-reset" onclick="setAtt('${ds}','manualTotal',0)">自動に戻す</button>`:''}
         </div>`:`<button class="manual-add" onclick="toggleManual('${ds}')">✎ 合計を手入力</button>`}
-        ${has?`<div class="day-total${t.overridden?' ovr':''}">${t.overridden?'<span class="ovr-tag">手動</span>':''}${yen(t.total)}</div>`:''}
-      </div>
-    </div>`;
+        ${has?`<div class="day-total${t.overridden?' ovr':''}">${t.overridden?'<span class="ovr-tag">手動</span>':''}${yen(t.total)}</div>`:''}`;
+}
+
+/* カレンダーグリッド（金額ヒートマップ＋出勤ドット＋祝日） */
+function buildCalendar(days,recMap,emp){
+  let max=0;const totals=new Map();
+  days.forEach(ds=>{
+    const rec=recMap.get(ds);
+    if(rec&&recHasData(rec)){const t=dailyTotal(rec,emp).total;totals.set(ds,t);if(t>max)max=t;}
   });
-  html+='</div>';
+  const todayStr=ymd(new Date().getFullYear(),new Date().getMonth()+1,new Date().getDate());
+  const first=new Date(days[0]+'T00:00:00').getDay();
+  let cells='';
+  for(let i=0;i<first;i++)cells+='<div class="cal-cell blank"></div>';
+  days.forEach(ds=>{
+    const d=new Date(ds+'T00:00:00');
+    const dow=d.getDay();
+    const hol=jpHoliday(d.getFullYear(),d.getMonth()+1,d.getDate());
+    const rec=recMap.get(ds);
+    const t=totals.get(ds)||0;
+    const cls=['cal-cell'];
+    if(dow===0||hol)cls.push('sun');else if(dow===6)cls.push('sat');
+    if(ds===todayStr)cls.push('today');
+    const dots=((rec&&rec.attendance>0)?'<i class="dot-day"></i>':'')+((rec&&rec.nightAttendance>0)?'<i class="dot-night"></i>':'');
+    const alpha=max&&t?(0.08+0.42*(t/max)):0;
+    cells+=`<button type="button" class="${cls.join(' ')}"${alpha?` style="background:rgba(63,95,167,${alpha.toFixed(2)})"`:''} onclick="openDaySheet('${ds}')">
+      <span class="cal-d">${d.getDate()}</span>
+      ${dots?`<span class="cal-dots">${dots}</span>`:''}
+      ${hol?`<span class="cal-hol">${esc(hol)}</span>`:''}
+    </button>`;
+  });
+  return `<div class="card">
+    <div class="cal-week">${WEEK.map((w,i)=>`<span class="${i===0?'sun':i===6?'sat':''}">${w}</span>`).join('')}</div>
+    <div class="cal-grid">${cells}</div>
+    <div class="cal-leg"><span><i class="dot-day"></i>日勤</span><span><i class="dot-night"></i>夜勤</span><span><span class="cal-leg-hm"></span>濃いほど金額大</span></div>
+  </div>`;
+}
+
+function renderAtt(){
+  updateHeaderMonth();
+  const body=$('att-body');
+  const emp=STATE.employees.find(e=>e.id===selEmp);
+  if(!emp){
+    body.innerHTML='<div class="empty">従業員がいません<br>上の「＋ 追加」から登録してください</div>';
+    return;
+  }
+  const days=daysInMonthList(viewY,viewM);
+  const recMap=new Map();
+  STATE.records.forEach(r=>{if(r.employeeId===emp.id)recMap.set(r.date,r);});
+  const otRate=overtimeRate(emp.dailyWage);
+  const otRateN=overtimeRate(emp.nightWage||0);
+  const nightEnabled=(emp.nightWage||0)>0;
+
+  let runTotal=0;
+  days.forEach(ds=>{
+    const rec=recMap.get(ds);
+    if(rec&&recHasData(rec))runTotal+=dailyTotal(rec,emp).total;
+  });
+
+  let html=`<div class="card" style="padding:13px 14px;">
+    <div class="att-head">
+      <div><div class="att-emp">${esc(emp.name)}</div>
+      <div class="att-meta">日給 ${yen(emp.dailyWage)}　残業 ${yen(Math.round(otRate))}/h${nightEnabled?`<br>夜間 ${yen(emp.nightWage)}　夜残業 ${yen(Math.round(otRateN))}/h`:''}</div></div>
+      <button class="btn btn-ghost btn-sm" style="width:auto;" onclick="openEmpModal('${emp.id}')">編集</button>
+    </div>
+    <div class="bulk-row">
+      <button class="bulk-b" onclick="bulkFill('weekday')">平日を1で埋める</button>
+      <button class="bulk-b danger" onclick="bulkFill('clear')">この月をクリア</button>
+    </div></div>`;
+
+  html+=`<div class="seg">
+    <button class="seg-b${attView==='list'?' sel':''}" onclick="setAttView('list')">リスト</button>
+    <button class="seg-b${attView==='cal'?' sel':''}" onclick="setAttView('cal')">カレンダー</button>
+  </div>`;
+
+  if(attView==='cal'){
+    html+=buildCalendar(days,recMap,emp);
+  }else{
+    html+='<div class="day-list">';
+    days.forEach(ds=>{
+      const d=new Date(ds+'T00:00:00');const dow=d.getDay();
+      const hol=jpHoliday(d.getFullYear(),d.getMonth()+1,d.getDate());
+      const rec=recMap.get(ds)||blankRec();
+      const hasNight=(rec.nightAttendance>0||rec.nightOvertimeHours>0);
+      const cls=['day'];
+      if(rec.attendance>0||hasNight)cls.push('work');
+      if(dow===0||hol)cls.push('weekend');
+      if(dow===6&&!hol)cls.push('sat');
+      html+=`<div class="${cls.join(' ')}">
+      <div class="dcell-l"><div class="dnum">${d.getDate()}</div><div class="ddow">${WEEK[dow]}</div>${hol?`<div class="dhol">${esc(hol)}</div>`:''}</div>
+      <div class="dcell-r">${dayControlsHTML(ds,rec,emp)}</div>
+    </div>`;
+    });
+    html+='</div>';
+  }
 
   const cheer=runTotal===0?'今月はこれから':runTotal<100000?'コツコツ積み上げ中':runTotal<300000?'今月もお疲れさま':'おっ、いい月だ';
   const seed=(lastRunTotal==null)?0:lastRunTotal;
@@ -468,6 +592,33 @@ function renderAtt(){
   body.innerHTML=html;
   animateYen($('run-v'),runTotal);
   lastRunTotal=runTotal;
+}
+
+/* ---------- 日別シート（カレンダーのセルタップ） ---------- */
+let daySheetDate=null;
+function openDaySheet(ds){
+  if(!selEmp)return;
+  daySheetDate=ds;
+  renderDaySheet();
+  $('day-modal').classList.add('show');
+  haptic();
+}
+window.openDaySheet=openDaySheet;
+function closeDaySheet(){daySheetDate=null;$('day-modal').classList.remove('show');}
+$('day-modal-close').addEventListener('click',closeDaySheet);
+$('day-modal').addEventListener('click',e=>{if(e.target===$('day-modal'))closeDaySheet();});
+function renderDaySheet(){
+  if(!daySheetDate)return;
+  const emp=STATE.employees.find(e=>e.id===selEmp);
+  if(!emp){closeDaySheet();return;}
+  const ds=daySheetDate;
+  const d=new Date(ds+'T00:00:00');
+  const hol=jpHoliday(d.getFullYear(),d.getMonth()+1,d.getDate());
+  const rec=STATE.records.find(r=>r.employeeId===emp.id&&r.date===ds)||blankRec();
+  $('day-modal-title').innerHTML=`${d.getMonth()+1}月${d.getDate()}日（${WEEK[d.getDay()]}）`+
+    (hol?`<span style="color:var(--danger);font-size:.72em;font-weight:700;">　${esc(hol)}</span>`:'')+
+    `<span style="color:var(--sub);font-size:.72em;font-weight:700;">　${esc(emp.name)}</span>`;
+  $('day-sheet-body').innerHTML=`<div class="dcell-r">${dayControlsHTML(ds,rec,emp)}</div>`;
 }
 
 function setAtt(date,field,value){
@@ -480,18 +631,21 @@ function setAtt(date,field,value){
   saveRecords();
   haptic();
   renderAtt();
+  if(daySheetDate)renderDaySheet();
 }
 window.setAtt=setAtt;
 function toggleNight(ds){
   if(nightExpanded.has(ds))nightExpanded.delete(ds);else nightExpanded.add(ds);
   haptic();
   renderAtt();
+  if(daySheetDate)renderDaySheet();
 }
 window.toggleNight=toggleNight;
 function toggleManual(ds){
   if(manualExpanded.has(ds))manualExpanded.delete(ds);else manualExpanded.add(ds);
   haptic();
   renderAtt();
+  if(daySheetDate)renderDaySheet();
 }
 window.toggleManual=toggleManual;
 
@@ -506,15 +660,19 @@ function bulkFill(mode){
     return;
   }
   if(mode==='weekday'){
-    let n=0;
+    let n=0,nHol=0;
     days.forEach(ds=>{
-      const dow=new Date(ds+'T00:00:00').getDay();
+      const d=new Date(ds+'T00:00:00');const dow=d.getDay();
       if(dow===0||dow===6)return;
       let rec=STATE.records.find(r=>r.employeeId===selEmp&&r.date===ds);
       if(!rec){rec={id:uid(),employeeId:selEmp,date:ds,attendance:0,overtimeHours:0,nightAttendance:0,nightOvertimeHours:0,transportFee:0};STATE.records.push(rec);}
-      if((rec.attendance||0)===0){rec.attendance=1;n++;}
+      if((rec.attendance||0)===0){
+        rec.attendance=1;n++;
+        if(jpHoliday(d.getFullYear(),d.getMonth()+1,d.getDate()))nHol++;
+      }
     });
-    saveRecords();haptic();renderAtt();toast(`平日${n}日を出勤1にしました`);
+    saveRecords();haptic();renderAtt();
+    toast(`平日${n}日を出勤1にしました${nHol?`（祝日${nHol}日を含む）`:''}`);
   }
 }
 window.bulkFill=bulkFill;
