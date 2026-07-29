@@ -108,17 +108,9 @@ svg.ic{fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;strok
 /* ===== PAGES ===== */
 .pages{flex:1;position:relative;overflow:hidden;}
 .page{position:absolute;inset:0;overflow-y:auto;-webkit-overflow-scrolling:touch;display:none;}
-.page.active{display:block;animation:fade var(--dur-2) var(--ease);}
+.page.active{display:block;}
 @keyframes fade{from{opacity:0;}to{opacity:1;}}
 .sc{padding:14px 13px calc(20px + var(--sb));}
-.page.active .sc>*{animation:fadeUp var(--dur-3) var(--ease) backwards;}
-.page.active .sc>*:nth-child(1){animation-delay:.02s;}
-.page.active .sc>*:nth-child(2){animation-delay:.07s;}
-.page.active .sc>*:nth-child(3){animation-delay:.12s;}
-.page.active .sc>*:nth-child(4){animation-delay:.17s;}
-.page.active .sc>*:nth-child(5){animation-delay:.22s;}
-.page.active .sc>*:nth-child(n+6){animation-delay:.26s;}
-@keyframes fadeUp{from{opacity:0;transform:translateY(12px);}to{opacity:1;transform:none;}}
 
 /* ===== TAB BAR ===== */
 .tabbar{
@@ -171,7 +163,6 @@ select{background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/
 .att-meta{font-size:var(--fs-sm);color:var(--sub);margin-top:2px;}
 .day-list{display:flex;flex-direction:column;gap:7px;}
 .day{
-  content-visibility:auto;contain-intrinsic-size:auto 150px;
   display:grid;grid-template-columns:54px 1fr;gap:10px;align-items:center;
   background:var(--surface);border:1px solid rgba(15,27,51,.04);border-left:3px solid transparent;
   border-radius:12px;padding:10px 11px;box-shadow:var(--shadow-sm);
@@ -248,7 +239,7 @@ i.dot-night{background:var(--night);}
 .runbar{
   position:sticky;bottom:0;background:var(--grad-hero);color:#fff;border-radius:16px;
   padding:14px 18px;margin-top:14px;display:flex;align-items:center;justify-content:space-between;
-  box-shadow:var(--shadow-lg),inset 0 1px 0 rgba(255,255,255,.2);overflow:hidden;view-transition-name:hero-card;
+  box-shadow:var(--shadow-lg),inset 0 1px 0 rgba(255,255,255,.2);overflow:hidden;
 }
 .runbar::after{content:'';position:absolute;inset:0;background:var(--sheen),radial-gradient(110% 130% at 92% -20%,rgba(122,150,255,.3),transparent 55%);pointer-events:none;}
 .runbar>*{position:relative;z-index:1;}
@@ -268,7 +259,7 @@ i.dot-night{background:var(--night);}
 .sum-emp-total{font-size:var(--fs-lg);font-weight:800;color:var(--navy-2);}
 .sum-emp-detail{display:flex;flex-wrap:wrap;gap:4px 14px;font-size:var(--fs-sm);color:var(--sub);}
 .sum-emp-btn{margin-top:10px;}
-.grand{position:relative;overflow:hidden;background:var(--grad-hero);color:#fff;border-radius:18px;padding:20px 18px 18px;margin-bottom:12px;box-shadow:var(--shadow-md),inset 0 1px 0 rgba(255,255,255,.2);view-transition-name:hero-card;}
+.grand{position:relative;overflow:hidden;background:var(--grad-hero);color:#fff;border-radius:18px;padding:20px 18px 18px;margin-bottom:12px;box-shadow:var(--shadow-md),inset 0 1px 0 rgba(255,255,255,.2);}
 .grand::before{content:'¥';position:absolute;right:-10px;top:-38px;font-size:9.5rem;font-weight:800;color:rgba(255,255,255,.05);line-height:1;pointer-events:none;}
 .grand::after{content:'';position:absolute;inset:0;background:var(--sheen),radial-gradient(120% 100% at 88% -12%,rgba(122,150,255,.3),transparent 55%);pointer-events:none;}
 .grand>*{position:relative;z-index:1;}
@@ -277,7 +268,7 @@ i.dot-night{background:var(--night);}
 .grand-sub{font-size:var(--fs-sm);opacity:.72;margin-top:8px;}
 
 /* ===== DASHBOARD ===== */
-.dash-hero{position:relative;overflow:hidden;background:var(--grad-hero);color:#fff;border-radius:18px;padding:20px 18px 18px;margin-bottom:12px;box-shadow:var(--shadow-md),inset 0 1px 0 rgba(255,255,255,.2);view-transition-name:hero-card;}
+.dash-hero{position:relative;overflow:hidden;background:var(--grad-hero);color:#fff;border-radius:18px;padding:20px 18px 18px;margin-bottom:12px;box-shadow:var(--shadow-md),inset 0 1px 0 rgba(255,255,255,.2);}
 .dash-hero::before{content:'¥';position:absolute;right:-10px;top:-38px;font-size:9.5rem;font-weight:800;color:rgba(255,255,255,.05);line-height:1;pointer-events:none;}
 .dash-hero::after{content:'';position:absolute;inset:0;background:var(--sheen),radial-gradient(120% 100% at 88% -12%,rgba(122,150,255,.3),transparent 55%);pointer-events:none;}
 .dash-hero>*{position:relative;z-index:1;}
@@ -355,29 +346,17 @@ i.dot-night{background:var(--night);}
 .empty{text-align:center;padding:40px 20px;color:var(--mut);font-size:var(--fs-md);line-height:2;text-wrap:pretty;}
 .att-emp,.modal-title,.period-main,.stat-l{text-wrap:balance;}
 
-/* 遷移アニメーション中は、ページ側の入場アニメーションを止めて二重動作を避ける */
-html[data-vt] .page.active,html[data-vt] .page.active .sc>*{animation:none;}
-
-/* ===== VIEW TRANSITIONS（タブ切替をネイティブ級に）=====
-   対応していない端末では単に即時切替になる（機能検出は app.js 側） */
-::view-transition-old(root),::view-transition-new(root){
-  animation-duration:.34s;animation-timing-function:var(--ease);
-}
-@keyframes vt-out-l{to{transform:translateX(-30px);opacity:0;}}
-@keyframes vt-in-r{from{transform:translateX(30px);opacity:0;}}
-@keyframes vt-out-r{to{transform:translateX(30px);opacity:0;}}
-@keyframes vt-in-l{from{transform:translateX(-30px);opacity:0;}}
-html[data-vt="fwd"]::view-transition-old(root){animation-name:vt-out-l;}
-html[data-vt="fwd"]::view-transition-new(root){animation-name:vt-in-r;}
-html[data-vt="back"]::view-transition-old(root){animation-name:vt-out-r;}
-html[data-vt="back"]::view-transition-new(root){animation-name:vt-in-l;}
-/* ヒーローの金額カードはタブをまたいで形を変えながら移動する */
-::view-transition-group(hero-card){animation-duration:.42s;animation-timing-function:var(--ease);}
-::view-transition-old(hero-card),::view-transition-new(hero-card){height:100%;}
+/* ===== ページ遷移 =====
+   View Transitions API は1回の切替あたり約55msを消費し（実測）、CSS側の最適化では
+   取り除けなかったため、同じ見た目を transform/opacity だけで再現する。
+   合成のみで動くので約4倍速い。ヒーローカードの移動は app.js の FLIP で行う。 */
+.pg-in{animation:pgIn .24s var(--ease) both;}
+.pg-in-back{animation:pgInBack .24s var(--ease) both;}
+@keyframes pgIn{from{opacity:0;transform:translate3d(26px,0,0);}to{opacity:1;transform:none;}}
+@keyframes pgInBack{from{opacity:0;transform:translate3d(-26px,0,0);}to{opacity:1;transform:none;}}
 
 @media (prefers-reduced-motion: reduce){
   *,*::before,*::after{animation-duration:.01ms!important;transition-duration:.01ms!important;}
-  ::view-transition-group(*),::view-transition-old(*),::view-transition-new(*){animation:none!important;}
 }
 
 /* ===== 請求書プレビュー オーバーレイ ===== */

@@ -69,7 +69,15 @@ const saveReady=()=>idbSet('ready',STATE.ready);
 /* ---------- utils ---------- */
 function $(id){return document.getElementById(id);}
 function toast(m){const e=$('toast');e.textContent=m;e.classList.add('show');clearTimeout(e._t);e._t=setTimeout(()=>e.classList.remove('show'),2200);}
-function haptic(){try{$('hapticLbl').click();}catch(e){}}
+/* iOS標準スイッチの触覚を借りて振動させる。label.click() は対象のチェックボックスへ
+   フォーカスを移してしまうため、元のフォーカス（入力中の欄）を必ず戻す。 */
+function haptic(){
+  try{
+    const a=document.activeElement;
+    $('hapticLbl').click();
+    if(a&&a!==document.activeElement&&typeof a.focus==='function')a.focus({preventScroll:true});
+  }catch(e){}
+}
 function yen(n){return '¥'+Math.round(n||0).toLocaleString('ja-JP');}
 /* 金額の装飾マークアップ（¥を小さく・数字を太く） */
 function yenHTML(n){return `<span class="mo"><span class="mo-y">¥</span><span class="mo-v">${Math.round(n||0).toLocaleString('ja-JP')}</span></span>`;}
@@ -275,18 +283,14 @@ async function migrate(){
 }
 
 /* ---------- TABS ---------- */
-/* View Transitions API（対応端末のみ）でタブ切替をネイティブ級の遷移にする。
-   非対応・モーション低減設定では従来どおり即時切替になる。 */
+/* タブ切替の遷移は transform/opacity だけで作る（合成のみ＝GPU）。
+   View Transitions API は同じ見た目でも1回あたり約55ms要したため使わない（実測）。
+   金額カードの移動は FLIP（位置差を transform で埋めてアニメーション）で表現する。 */
 const TAB_ORDER=['home','att','bill','set'];
 let curTab='home';
-function withViewTransition(fn,dir){
-  const de=document.documentElement;
-  if(!document.startViewTransition||matchMedia('(prefers-reduced-motion: reduce)').matches){fn();return;}
-  if(dir)de.dataset.vt=dir;
-  try{
-    document.startViewTransition(fn).finished.finally(()=>{delete de.dataset.vt;});
-  }catch(e){delete de.dataset.vt;fn();}
-}
+function reduceMotion(){return matchMedia('(prefers-reduced-motion: reduce)').matches;}
+/* 各ページの「主役の金額カード」。タブをまたいで動いて見せる対象 */
+function heroOf(page){return page?page.querySelector('.dash-hero,.grand,.runbar'):null;}
 function applyTab(t){
   document.querySelectorAll('.page').forEach(p=>p.classList.remove('active'));
   document.querySelectorAll('.tb').forEach(b=>{b.classList.remove('active');b.removeAttribute('aria-current');});
@@ -296,15 +300,43 @@ function applyTab(t){
   const cfg={home:['ホーム','DASHBOARD',false],att:['日給管理','ATTENDANCE',true],bill:['請求','INVOICE',false],set:['設定','SETTINGS',false]};
   $('ph-name').textContent=cfg[t][0]; $('ph-sub').textContent=cfg[t][1];
   $('ph-month').style.display=cfg[t][2]?'flex':'none';
+}
+/* 重い描画は遷移を始める前に済ませる（2つのスナップショット取得の間で main thread を止めない） */
+function prepareTab(t){
   if(t==='home')renderDash();
   if(t==='bill')renderBill();
   if(t==='set')renderSettingsLists();
 }
 function switchTab(t){
   const from=TAB_ORDER.indexOf(curTab),to=TAB_ORDER.indexOf(t);
-  const dir=(from<0||to<0||from===to)?null:(to>from?'fwd':'back');
+  const same=(from===to),back=(to<from);
   curTab=t;
-  withViewTransition(()=>applyTab(t),dir);
+  const anim=!same&&from>=0&&to>=0&&!reduceMotion();
+  // FLIP: 切替前のカード位置を控えておく
+  const prevHero=anim?heroOf(document.querySelector('.page.active')):null;
+  const first=prevHero?prevHero.getBoundingClientRect():null;
+
+  prepareTab(t);   // 重い描画は遷移アニメーションを始める前に済ませる
+  applyTab(t);
+
+  if(!anim)return;
+  const pg=$('page-'+t);
+  pg.classList.remove('pg-in','pg-in-back');
+  void pg.offsetWidth;                       // アニメーションを確実に再生させる
+  pg.classList.add(back?'pg-in-back':'pg-in');
+
+  // FLIP: 新しい位置との差を transform で埋めてから 0 に戻す（合成のみで動く）
+  const nextHero=heroOf(pg);
+  if(first&&nextHero&&nextHero.animate){
+    const last=nextHero.getBoundingClientRect();
+    const dx=first.left-last.left, dy=first.top-last.top;
+    if(Math.abs(dx)>2||Math.abs(dy)>2){
+      nextHero.animate(
+        [{transform:`translate3d(${dx}px,${dy}px,0)`},{transform:'translate3d(0,0,0)'}],
+        {duration:280,easing:'cubic-bezier(.22,.68,.32,1)'}
+      );
+    }
+  }
 }
 window.switchTab=switchTab;
 $('tb-home').addEventListener('click',()=>switchTab('home'));
@@ -500,6 +532,61 @@ window.setAttView=setAttView;
 
 function blankRec(){return {attendance:0,overtimeHours:0,nightAttendance:0,nightOvertimeHours:0,transportFee:0};}
 
+/* 日次行のクラス（全体描画と差分更新で同じ計算を使う） */
+function dayRowClass(ds,rec){
+  const d=new Date(ds+'T00:00:00'),dow=d.getDay();
+  const hol=jpHoliday(d.getFullYear(),d.getMonth()+1,d.getDate());
+  const cls=['day'];
+  if((rec.attendance||0)>0||(rec.nightAttendance||0)>0||(rec.nightOvertimeHours||0)>0)cls.push('work');
+  if(dow===0||hol)cls.push('weekend');
+  if(dow===6&&!hol)cls.push('sat');
+  return cls.join(' ');
+}
+/* 表示中の月の合計 */
+function monthRunTotal(emp){
+  let t=0;
+  const recMap=new Map();
+  (idx().byEmp.get(emp.id)||[]).forEach(r=>recMap.set(r.date,r));
+  daysInMonthList(viewY,viewM).forEach(ds=>{
+    const rec=recMap.get(ds);
+    if(rec&&recHasData(rec))t+=dailyTotal(rec,emp).total;
+  });
+  return t;
+}
+/* 合計バーだけ更新する */
+function updateRunTotal(emp){
+  const el=$('run-v');if(!el)return;
+  const total=monthRunTotal(emp);
+  animateYen(el,total);
+  lastRunTotal=total;
+  const cheer=document.querySelector('.runbar .rcheer');
+  if(cheer)cheer.textContent=total===0?'今月はこれから':total<100000?'コツコツ積み上げ中':total<300000?'今月もお疲れさま':'おっ、いい月だ';
+}
+/* 1日分だけ差し替える（31日分を作り直さないための差分更新） */
+function updateDayRow(ds,emp){
+  const row=document.querySelector(`.day[data-d="${ds}"]`);
+  if(!row)return false;
+  const rec=STATE.records.find(r=>r.employeeId===emp.id&&r.date===ds)||blankRec();
+  row.className=dayRowClass(ds,rec);
+  const right=row.querySelector('.dcell-r');
+  if(!right)return false;
+  right.innerHTML=dayControlsHTML(ds,rec,emp);
+  return true;
+}
+/* 金額表示だけ更新する（入力中のフォーカスを壊さないため行は作り直さない） */
+function updateDayTotalOnly(ds,emp){
+  const row=document.querySelector(`.day[data-d="${ds}"]`);
+  if(!row)return false;
+  const rec=STATE.records.find(r=>r.employeeId===emp.id&&r.date===ds)||blankRec();
+  const t=dailyTotal(rec,emp);
+  const has=recHasData(rec);
+  const el=row.querySelector('.day-total');
+  if(!has||!el)return false;               // 表示の有無が変わる場合は行ごと作り直す
+  if(t.overridden!==el.classList.contains('ovr'))return false;
+  el.innerHTML=(t.overridden?'<span class="ovr-tag">手動</span>':'')+yen(t.total);
+  return true;
+}
+
 /* 1日分の入力コントロール（リスト行と日別シートで共用） */
 function dayControlsHTML(ds,rec,emp){
   const t=dailyTotal(rec,emp);
@@ -621,12 +708,7 @@ function renderAtt(){
       const d=new Date(ds+'T00:00:00');const dow=d.getDay();
       const hol=jpHoliday(d.getFullYear(),d.getMonth()+1,d.getDate());
       const rec=recMap.get(ds)||blankRec();
-      const hasNight=(rec.nightAttendance>0||rec.nightOvertimeHours>0);
-      const cls=['day'];
-      if(rec.attendance>0||hasNight)cls.push('work');
-      if(dow===0||hol)cls.push('weekend');
-      if(dow===6&&!hol)cls.push('sat');
-      html+=`<div class="${cls.join(' ')}">
+      html+=`<div class="${dayRowClass(ds,rec)}" data-d="${ds}">
       <div class="dcell-l"><div class="dnum">${d.getDate()}</div><div class="ddow">${WEEK[dow]}</div>${hol?`<div class="dhol">${esc(hol)}</div>`:''}</div>
       <div class="dcell-r">${dayControlsHTML(ds,rec,emp)}</div>
     </div>`;
@@ -678,21 +760,34 @@ function setAtt(date,field,value){
   if(field==='manualTotal'&&v===0)manualExpanded.delete(xk(date));
   saveRecords();
   haptic();
-  renderAtt();
+  refreshDay(date,field);
   if(daySheetDate)renderDaySheet();
 }
 window.setAtt=setAtt;
+
+/* 1日分の変更を画面に反映する。31日分を作り直さず、その行だけ差し替える。
+   数値入力（残業h・車代）は入力中のフォーカスを壊さないよう金額表示だけ更新する。 */
+const REBUILD_FIELDS=['attendance','nightAttendance','manualTotal'];
+function refreshDay(ds,field){
+  const emp=STATE.employees.find(e=>e.id===selEmp);
+  if(!emp)return;
+  if(attView!=='list'){renderAtt();return;}   // カレンダー表示は全体を描き直す
+  const light=field&&!REBUILD_FIELDS.includes(field);
+  const ok=light?(updateDayTotalOnly(ds,emp)||updateDayRow(ds,emp)):updateDayRow(ds,emp);
+  if(!ok){renderAtt();return;}                // 行が見つからない等は従来どおり全体描画
+  updateRunTotal(emp);
+}
 function toggleNight(ds){
   const k=xk(ds);if(nightExpanded.has(k))nightExpanded.delete(k);else nightExpanded.add(k);
   haptic();
-  renderAtt();
+  refreshDay(ds,'attendance');
   if(daySheetDate)renderDaySheet();
 }
 window.toggleNight=toggleNight;
 function toggleManual(ds){
   const k=xk(ds);if(manualExpanded.has(k))manualExpanded.delete(k);else manualExpanded.add(k);
   haptic();
-  renderAtt();
+  refreshDay(ds,'attendance');
   if(daySheetDate)renderDaySheet();
 }
 window.toggleManual=toggleManual;
