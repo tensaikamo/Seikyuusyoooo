@@ -30,6 +30,8 @@
   --ok:#16a34a;
   --danger:#dc2626;
   --night:#5b46c9;
+  --chart-blue:#3f5fa7;
+  --chart-amber:#d97e06;
   --r:14px;
   --r-sm:11px;
   --sb:env(safe-area-inset-bottom,0px);
@@ -214,13 +216,18 @@ select{background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/
 .cal-week .sun{color:var(--danger);}
 .cal-week .sat{color:#2563eb;}
 .cal-grid{display:grid;grid-template-columns:repeat(7,1fr);gap:4px;}
-.cal-cell{position:relative;min-height:52px;border:none;background:#f4f6fa;border-radius:9px;cursor:pointer;display:flex;flex-direction:column;align-items:center;justify-content:flex-start;padding:6px 1px 3px;gap:2px;transition:transform var(--dur-1) var(--snap);font-family:inherit;}
+.cal-cell{position:relative;min-height:52px;border:none;background:#f4f6fa;background:color-mix(in oklab,var(--chart-blue) var(--cell-tint,0%),#f4f6fa);border-radius:9px;cursor:pointer;display:flex;flex-direction:column;align-items:center;justify-content:flex-start;padding:6px 1px 3px;gap:2px;transition:transform var(--dur-1) var(--snap);font-family:inherit;}
 .cal-cell:active{transform:scale(.93);}
 .cal-cell.blank{background:transparent;pointer-events:none;}
 .cal-d{font-size:var(--fs-sm);font-weight:800;line-height:1;color:var(--ink);}
 .cal-cell.sun .cal-d{color:var(--danger);}
 .cal-cell.sat .cal-d{color:#2563eb;}
 .cal-cell.today{outline:2px solid var(--amber);outline-offset:-2px;}
+/* 濃色セルは前景を反転して可読性を確保（日曜/土曜の色分けより優先する） */
+.cal-cell.hot .cal-d,.cal-cell.hot.sun .cal-d,.cal-cell.hot.sat .cal-d{color:#fff;}
+.cal-cell.hot .cal-hol{color:#ffd7d2;}
+.cal-cell.hot i.dot-day{background:#fff;}
+.cal-cell.hot i.dot-night{background:#d9cfff;}
 .cal-dots{display:flex;gap:2px;}
 i.dot-day,i.dot-night{width:5px;height:5px;border-radius:50%;display:inline-block;}
 i.dot-day{background:#3f5fa7;}

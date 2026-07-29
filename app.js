@@ -34,15 +34,33 @@ let STATE={
 };
 let viewY=new Date().getFullYear(), viewM=new Date().getMonth()+1; // 1-12
 let selEmp=null;       // 勤怠タブで選択中のemployeeId
-let nightExpanded=new Set(); // その月で夜勤欄を開いている日付
-let manualExpanded=new Set(); // 合計手入力欄を開いている日付
+/* 開閉状態は「従業員ID|日付」をキーにする（日付だけだと従業員を切り替えても開いたままになる） */
+let nightExpanded=new Set(); // 夜勤欄を開いている 従業員ID|日付
+let manualExpanded=new Set(); // 合計手入力欄を開いている 従業員ID|日付
+function xk(ds){return selEmp+'|'+ds;}
 let billY=new Date().getFullYear(), billM=new Date().getMonth()+1; // 請求タブの請求月
 let lastRunTotal=null;   // runbarカウントアップの前回値
 let lastGrandTotal=null; // 請求合計カウントアップの前回値
 let editEmpId=null;    // モーダル編集対象
 
-const saveEmployees=()=>idbSet('employees',STATE.employees);
-const saveRecords=()=>idbSet('records',STATE.records);
+/* ---------- 索引キャッシュ ----------
+   レコードのループ内で employees.find() を呼ぶと O(レコード数 × 従業員数) になり、
+   数年分たまると体感で遅くなる。従業員IDでの索引を作って使い回し、保存時に破棄する。 */
+let _idx=null;
+function invalidateIdx(){_idx=null;}
+function idx(){
+  if(_idx)return _idx;
+  const empById=new Map(STATE.employees.map(e=>[e.id,e]));
+  const byEmp=new Map();
+  STATE.employees.forEach(e=>byEmp.set(e.id,[]));
+  STATE.records.forEach(r=>{const a=byEmp.get(r.employeeId);if(a)a.push(r);});
+  byEmp.forEach(a=>a.sort((x,y)=>x.date<y.date?-1:x.date>y.date?1:0));
+  _idx={empById,byEmp};
+  return _idx;
+}
+
+const saveEmployees=()=>{invalidateIdx();return idbSet('employees',STATE.employees);};
+const saveRecords=()=>{invalidateIdx();return idbSet('records',STATE.records);};
 const saveSettings=()=>idbSet('settings',STATE.settings);
 const saveReady=()=>idbSet('ready',STATE.ready);
 
@@ -191,7 +209,7 @@ function calcTax(sub,rate){return Math.floor(sub*(rate/100));}
 
 /** 期間レポート（従業員1人）*/
 function periodReport(emp,start,end){
-  const recs=STATE.records.filter(r=>r.employeeId===emp.id&&r.date>=start&&r.date<=end&&recHasData(r));
+  const recs=(idx().byEmp.get(emp.id)||[]).filter(r=>r.date>=start&&r.date<=end&&recHasData(r));
   let att=0,natt=0,wage=0,ot=0,nwage=0,not=0,tr=0;
   recs.forEach(r=>{
     const t=dailyTotal(r,emp);
@@ -224,6 +242,7 @@ async function boot(){
     if(ready)STATE.ready=ready;
     if(!ready) await migrate();
   }catch(e){toast('⚠️ データ読込エラー');}
+  invalidateIdx();
   if('serviceWorker'in navigator){try{await navigator.serviceWorker.register('sw.js');}catch(e){}}
   $('ver').textContent=APP_VERSION;
   buildClosingOptions();
@@ -284,9 +303,10 @@ const CHART_BLUE='#3f5fa7', CHART_AMBER='#d97e06'; // 配色はCVD/コントラ�
 function monthKey(ds){return ds.slice(0,7);}
 function monthTotalsMap(){
   const map=new Map(); // 'YYYY-MM' -> 合計
+  const {empById}=idx();
   STATE.records.forEach(r=>{
     if(!recHasData(r))return;
-    const emp=STATE.employees.find(e=>e.id===r.employeeId);
+    const emp=empById.get(r.employeeId);
     if(!emp)return;
     const k=monthKey(r.date);
     map.set(k,(map.get(k)||0)+dailyTotal(r,emp).total);
@@ -316,12 +336,16 @@ function barPath(x,y,w,h,r){
   return `M${x} ${yb} L${x} ${y+r} Q${x} ${y} ${x+r} ${y} L${x2-r} ${y} Q${x2} ${y} ${x2} ${y+r} L${x2} ${yb} Z`;
 }
 let dashMonths=[]; // 直近12ヶ月 [{key,y,m,total}]
+/* グラフのレイアウト定数は1箇所に集約する（描画とツールチップで二重定義するとズレる） */
+const CHART={W:344,H:170,padL:34,padR:6,padT:16,padB:18,n:12};
+CHART.bandW=(CHART.W-CHART.padL-CHART.padR)/CHART.n;
+function chartBandCenter(i){return CHART.padL+i*CHART.bandW+CHART.bandW/2;}
 function buildBarChart(){
-  const W=344,H=170,padL=34,padR=6,padT=16,padB=18;
+  const {W,H,padL,padR,padT,padB}=CHART;
   const plotW=W-padL-padR,plotH=H-padT-padB;
   const yMax=niceCeil(Math.max(...dashMonths.map(m=>m.total),1));
   const ys=v=>padT+plotH-(v/yMax*plotH);
-  const bandW=plotW/12;
+  const bandW=CHART.bandW;
   const barW=Math.min(20,bandW-6);
   let grid='',bars='',labels='',hits='';
   [0,yMax/2,yMax].forEach(t=>{
@@ -336,10 +360,10 @@ function buildBarChart(){
     const curM=(i===11);
     if(m.total>0)
       bars+=`<path class="bar" style="animation-delay:${i*35}ms" d="${barPath(x,y,barW,h,4)}" fill="${curM?CHART_AMBER:CHART_BLUE}"/>`;
-    labels+=`<text x="${padL+i*bandW+bandW/2}" y="${H-5}" text-anchor="middle" font-size="8.5" fill="${curM?'#5d6675':'#97a0af'}" font-weight="${curM?'700':'400'}">${m.m}月</text>`;
+    labels+=`<text x="${chartBandCenter(i)}" y="${H-5}" text-anchor="middle" font-size="8.5" fill="${curM?'#5d6675':'#97a0af'}" font-weight="${curM?'700':'400'}">${m.m}月</text>`;
     if(curM&&m.total>0)
-      labels+=`<text x="${padL+i*bandW+bandW/2}" y="${y-5}" text-anchor="middle" font-size="9.5" font-weight="700" fill="#5d6675">${fmtMan(m.total)}</text>`;
-    hits+=`<rect x="${padL+i*bandW}" y="${padT}" width="${bandW}" height="${plotH}" fill="transparent" onclick="dashTip(${i})"/>`;
+      labels+=`<text x="${chartBandCenter(i)}" y="${y-5}" text-anchor="middle" font-size="9.5" font-weight="700" fill="#5d6675">${fmtMan(m.total)}</text>`;
+    hits+=`<rect x="${padL+i*bandW}" y="${padT}" width="${bandW}" height="${plotH}" fill="transparent" onclick="dashTip(${i})"><title>${m.y}年${m.m}月 ${yen(m.total)}</title></rect>`;
   });
   return `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="月別売上の棒グラフ"><g>${grid}</g><g class="bars">${bars}</g><g>${labels}</g><g>${hits}</g></svg>`;
 }
@@ -347,9 +371,7 @@ let dashTipTimer=null;
 function dashTip(i){
   const m=dashMonths[i];const tip=$('dash-tip');
   if(!m||!tip)return;
-  const W=344,padL=34,padR=6;
-  const bandW=(W-padL-padR)/12;
-  const cx=(padL+i*bandW+bandW/2)/W*100;
+  const cx=chartBandCenter(i)/CHART.W*100;
   tip.textContent=`${m.y}年${m.m}月 ${yen(m.total)}`;
   tip.style.left=Math.min(86,Math.max(14,cx))+'%';
   tip.classList.add('show');
@@ -389,9 +411,10 @@ function renderDash(){
   // 今月の統計＋累計
   const km=`${Y}-${pad2(M)}`;
   let att=0,otH=0,cum=0;const days=new Set();
+  const {empById}=idx();
   STATE.records.forEach(r=>{
     if(!recHasData(r))return;
-    const emp=STATE.employees.find(e=>e.id===r.employeeId);
+    const emp=empById.get(r.employeeId);
     if(!emp)return;
     cum+=dailyTotal(r,emp).total;
     if(monthKey(r.date)!==km)return;
@@ -461,7 +484,7 @@ function dayControlsHTML(ds,rec,emp){
   const has=recHasData(rec);
   const nightEnabled=(emp.nightWage||0)>0;
   const hasNight=(rec.nightAttendance>0||rec.nightOvertimeHours>0);
-  const showNight=nightEnabled&&(hasNight||nightExpanded.has(ds));
+  const showNight=nightEnabled&&(hasNight||nightExpanded.has(xk(ds)));
   const attOpts=[0.5,1,1.5,2];
   return `
         <div class="shift-label">日勤</div>
@@ -485,7 +508,7 @@ function dayControlsHTML(ds,rec,emp){
             <div class="att-mini" style="visibility:hidden;"><label>　</label><input disabled></div>
           </div>
         </div>`:(nightEnabled?`<button class="night-add" onclick="toggleNight('${ds}')">＋ 夜勤を入力</button>`:'')}
-        ${t.overridden||manualExpanded.has(ds)?`
+        ${t.overridden||manualExpanded.has(xk(ds))?`
         <div class="manual-sec">
           <div class="att-mini"><label>合計を手入力</label><input type="number" inputmode="numeric" value="${rec.manualTotal||''}" placeholder="自動計算" onchange="setAtt('${ds}','manualTotal',this.value)"></div>
           ${t.overridden?`<button class="manual-reset" onclick="setAtt('${ds}','manualTotal',0)">自動に戻す</button>`:''}
@@ -514,8 +537,11 @@ function buildCalendar(days,recMap,emp){
     if(dow===0||hol)cls.push('sun');else if(dow===6)cls.push('sat');
     if(ds===todayStr)cls.push('today');
     const dots=((rec&&rec.attendance>0)?'<i class="dot-day"></i>':'')+((rec&&rec.nightAttendance>0)?'<i class="dot-night"></i>':'');
-    const alpha=max&&t?(0.08+0.42*(t/max)):0;
-    cells+=`<button type="button" class="${cls.join(' ')}"${alpha?` style="background:rgba(63,95,167,${alpha.toFixed(2)})"`:''} onclick="openDaySheet('${ds}')">
+    // 金額のヒートマップ。濃い側は文字が読めなくなるので .hot で前景を反転する
+    const tint=(max&&t)?(10+46*(t/max)):0;
+    if(tint>=34)cls.push('hot');
+    const aria=`${d.getMonth()+1}月${d.getDate()}日${hol?' '+hol:''}${t?' '+yen(t):' 未入力'}`;
+    cells+=`<button type="button" class="${cls.join(' ')}"${tint?` style="--cell-tint:${tint.toFixed(0)}%"`:''} aria-label="${esc(aria)}" onclick="openDaySheet('${ds}')">
       <span class="cal-d">${d.getDate()}</span>
       ${dots?`<span class="cal-dots">${dots}</span>`:''}
       ${hol?`<span class="cal-hol">${esc(hol)}</span>`:''}
@@ -538,7 +564,7 @@ function renderAtt(){
   }
   const days=daysInMonthList(viewY,viewM);
   const recMap=new Map();
-  STATE.records.forEach(r=>{if(r.employeeId===emp.id)recMap.set(r.date,r);});
+  (idx().byEmp.get(emp.id)||[]).forEach(r=>recMap.set(r.date,r));
   const otRate=overtimeRate(emp.dailyWage);
   const otRateN=overtimeRate(emp.nightWage||0);
   const nightEnabled=(emp.nightWage||0)>0;
@@ -627,7 +653,7 @@ function setAtt(date,field,value){
   let rec=STATE.records.find(r=>r.employeeId===selEmp&&r.date===date);
   if(!rec){rec={id:uid(),employeeId:selEmp,date,attendance:0,overtimeHours:0,nightAttendance:0,nightOvertimeHours:0,transportFee:0};STATE.records.push(rec);}
   rec[field]=v;
-  if(field==='manualTotal'&&v===0)manualExpanded.delete(date);
+  if(field==='manualTotal'&&v===0)manualExpanded.delete(xk(date));
   saveRecords();
   haptic();
   renderAtt();
@@ -635,14 +661,14 @@ function setAtt(date,field,value){
 }
 window.setAtt=setAtt;
 function toggleNight(ds){
-  if(nightExpanded.has(ds))nightExpanded.delete(ds);else nightExpanded.add(ds);
+  const k=xk(ds);if(nightExpanded.has(k))nightExpanded.delete(k);else nightExpanded.add(k);
   haptic();
   renderAtt();
   if(daySheetDate)renderDaySheet();
 }
 window.toggleNight=toggleNight;
 function toggleManual(ds){
-  if(manualExpanded.has(ds))manualExpanded.delete(ds);else manualExpanded.add(ds);
+  const k=xk(ds);if(manualExpanded.has(k))manualExpanded.delete(k);else manualExpanded.add(k);
   haptic();
   renderAtt();
   if(daySheetDate)renderDaySheet();
@@ -687,8 +713,9 @@ window.bulkFill=bulkFill;
     if(taps>=5){
       taps=0;
       let total=0;
+      const {empById}=idx();
       STATE.records.forEach(r=>{
-        const emp=STATE.employees.find(e=>e.id===r.employeeId);
+        const emp=empById.get(r.employeeId);
         if(emp)total+=dailyTotal(r,emp).total;
       });
       haptic();
@@ -869,6 +896,54 @@ function buildInvoiceHTML(reports,period,batch,cssMode){
       <div class="inv-bank-row">名義：${esc(bank.accountHolder)}</div>
     </div>`:'';
 
+  // ---- 出面内訳のシートを先に組み立てる（総ページ数の確定に必要）----
+  // A4 1枚に安全に収まる明細行数。これを超える分は自動でページを分けるので、
+  // 行が用紙の境目で分断されたりページ番号がずれたりしない
+  // 実測でA4 1枚に収まるのは25行。最終シートは「合計」行が1行増えるので23行を上限にする
+  const ROWS_PER_SHEET=23;
+  const detailSheets=[];
+  reports.forEach(({emp,rep})=>{
+    const rowList=[];
+    daysInPeriod(period.start,period.end).forEach(ds=>{
+      const rec=rep.records.find(r=>r.date===ds);
+      if(!rec)return;
+      const t=dailyTotal(rec,emp);
+      const d=new Date(ds+'T00:00:00');
+      const dateLbl=`${d.getMonth()+1}/${d.getDate()}(${WEEK[d.getDay()]})`;
+      // 手入力で上書きした日は1行にまとめて表示
+      if(t.overridden){
+        rowList.push(`<tr><td class="inv-l">${dateLbl}</td><td class="inv-c">手動</td><td class="inv-c">—</td><td>${yen(t.total)}</td><td>—</td><td>—</td><td class="inv-bold">${yen(t.total)}</td></tr>`);
+        return;
+      }
+      const hasDay=(rec.attendance||0)>0||(rec.overtimeHours||0)>0;
+      const hasNight=(rec.nightAttendance||0)>0||(rec.nightOvertimeHours||0)>0;
+      const carOnDay=hasDay; // 車代は当日1回だけ
+      if(hasDay){
+        const dtl=t.wage+t.ot+(carOnDay?t.tr:0);
+        rowList.push(`<tr><td class="inv-l">${dateLbl}</td><td class="inv-c">日勤</td><td class="inv-c">${rec.attendance||0}</td><td>${yen(t.wage)}</td><td>${yen(t.ot)}</td><td>${carOnDay?yen(t.tr):'—'}</td><td class="inv-bold">${yen(dtl)}</td></tr>`);
+      }
+      if(hasNight){
+        const ntl=t.nwage+t.not+(!carOnDay?t.tr:0);
+        rowList.push(`<tr><td class="inv-l">${hasDay?'':dateLbl}</td><td class="inv-c"><span class="inv-night-tag">夜勤</span></td><td class="inv-c">${rec.nightAttendance||0}</td><td>${yen(t.nwage)}</td><td>${yen(t.not)}</td><td>${!carOnDay?yen(t.tr):'—'}</td><td class="inv-bold">${yen(ntl)}</td></tr>`);
+      }
+      if(!hasDay&&!hasNight&&(rec.transportFee||0)>0){
+        rowList.push(`<tr><td class="inv-l">${dateLbl}</td><td class="inv-c">—</td><td class="inv-c">0</td><td>¥0</td><td>¥0</td><td>${yen(t.tr)}</td><td class="inv-bold">${yen(t.tr)}</td></tr>`);
+      }
+    });
+    const chunks=[];
+    for(let i=0;i<rowList.length;i+=ROWS_PER_SHEET)chunks.push(rowList.slice(i,i+ROWS_PER_SHEET));
+    if(!chunks.length)chunks.push([]);
+    chunks.forEach((rows,ci)=>{
+      detailSheets.push({emp,rep,rows:rows.join(''),
+        part:chunks.length>1?`（${ci+1}/${chunks.length}）`:'',
+        last:ci===chunks.length-1});
+    });
+  });
+
+  // 総ページ数＝表紙1 ＋ 明細シート数。ページ番号は固定文字列にしない
+  const totalPages=1+detailSheets.length;
+  const foot=n=>`<div class="inv-p1-foot"><span>登録番号 ${esc(issuer.invoiceNumber||'未設定')} ／ 適格請求書発行事業者</span><span>${n} / ${totalPages}</span></div>`;
+
   const page1=`<div class="inv-page">
     <div class="inv-topbar"></div>
     <div class="inv-inner">
@@ -921,68 +996,38 @@ function buildInvoiceHTML(reports,period,batch,cssMode){
       </table>
 
       ${bankBlock}
-      <div class="inv-p1-foot"><span>登録番号 ${esc(issuer.invoiceNumber||'未設定')} ／ 適格請求書発行事業者</span><span>1 / 2</span></div>
+      ${foot(1)}
     </div>
   </div>`;
 
-  // ---- 2ページ目：出面の内訳（従業員ごと）----
-  let page2inner='';
-  reports.forEach(({emp,rep})=>{
+  // ---- 2ページ目以降：出面の内訳 ----
+  const detailPages=detailSheets.map((sheet,idx)=>{
+    const {emp,rep,rows,part,last}=sheet;
     const otRate=overtimeRate(emp.dailyWage);
     const nightOn=(emp.nightWage||0)>0||rep.totalNightWage>0;
     const otRateN=overtimeRate(emp.nightWage||0);
-    const rows=daysInPeriod(period.start,period.end).map(ds=>{
-      const rec=rep.records.find(r=>r.date===ds);
-      if(!rec)return '';
-      const t=dailyTotal(rec,emp);
-      const d=new Date(ds+'T00:00:00');
-      const dateLbl=`${d.getMonth()+1}/${d.getDate()}(${WEEK[d.getDay()]})`;
-      // 手入力で上書きした日は1行にまとめて表示
-      if(t.overridden){
-        return `<tr><td class="inv-l">${dateLbl}</td><td class="inv-c">手動</td><td class="inv-c">—</td><td>${yen(t.total)}</td><td>—</td><td>—</td><td class="inv-bold">${yen(t.total)}</td></tr>`;
-      }
-      const hasDay=(rec.attendance||0)>0||(rec.overtimeHours||0)>0;
-      const hasNight=(rec.nightAttendance||0)>0||(rec.nightOvertimeHours||0)>0;
-      let out='';
-      const carOnDay=hasDay; // 車代は当日1回だけ
-      if(hasDay){
-        const dtl=t.wage+t.ot+(carOnDay?t.tr:0);
-        out+=`<tr><td class="inv-l">${dateLbl}</td><td class="inv-c">日勤</td><td class="inv-c">${rec.attendance||0}</td><td>${yen(t.wage)}</td><td>${yen(t.ot)}</td><td>${carOnDay?yen(t.tr):'—'}</td><td class="inv-bold">${yen(dtl)}</td></tr>`;
-      }
-      if(hasNight){
-        const ntl=t.nwage+t.not+(!carOnDay?t.tr:0);
-        out+=`<tr><td class="inv-l">${hasDay?'':dateLbl}</td><td class="inv-c"><span class="inv-night-tag">夜勤</span></td><td class="inv-c">${rec.nightAttendance||0}</td><td>${yen(t.nwage)}</td><td>${yen(t.not)}</td><td>${!carOnDay?yen(t.tr):'—'}</td><td class="inv-bold">${yen(ntl)}</td></tr>`;
-      }
-      if(!hasDay&&!hasNight&&(rec.transportFee||0)>0){
-        out+=`<tr><td class="inv-l">${dateLbl}</td><td class="inv-c">—</td><td class="inv-c">0</td><td>¥0</td><td>¥0</td><td>${yen(t.tr)}</td><td class="inv-bold">${yen(t.tr)}</td></tr>`;
-      }
-      return out;
-    }).join('');
     const totWage=rep.totalDailyWage+rep.totalNightWage;
     const totOt=rep.totalOvertimePay+rep.totalNightOvertimePay;
     const totAtt=rep.totalAttendance+rep.totalNightAttendance;
-    page2inner+=`
-      <div class="inv-emp-block">
-        <div class="inv-emp-block-title">${esc(emp.name)}<span>日給 ${yen(emp.dailyWage)}／残業 ${yen(Math.round(otRate))}/h${nightOn?`　夜間 ${yen(emp.nightWage||0)}／夜残業 ${yen(Math.round(otRateN))}/h`:''}</span></div>
-        <table class="inv-detail">
-          <thead><tr><th class="inv-l">日付</th><th class="inv-c">区分</th><th class="inv-c">出勤</th><th>人工代</th><th>残業代</th><th>車代</th><th>計</th></tr></thead>
-          <tbody>${rows}
-            <tr class="inv-total-row"><td class="inv-l">合計</td><td></td><td class="inv-c">${totAtt}</td><td>${yen(totWage)}</td><td>${yen(totOt)}</td><td>${yen(rep.totalTransportFee)}</td><td>${yen(rep.grandTotal)}</td></tr>
-          </tbody>
-        </table>
-      </div>`;
-  });
-  const page2=`<div class="inv-page">
+    const totalRow=last?`<tr class="inv-total-row"><td class="inv-l">合計</td><td></td><td class="inv-c">${totAtt}</td><td>${yen(totWage)}</td><td>${yen(totOt)}</td><td>${yen(rep.totalTransportFee)}</td><td>${yen(rep.grandTotal)}</td></tr>`:'';
+    return `<div class="inv-page">
     <div class="inv-topbar"></div>
     <div class="inv-inner">
       <div class="inv-p2-title">出　面　内　訳</div>
       <div class="inv-p2-sub">${period.label}　／　${esc(s.issuer.companyName||'')}</div>
-      ${page2inner}
-      <div class="inv-p1-foot"><span>登録番号 ${esc(s.issuer.invoiceNumber||'未設定')} ／ 適格請求書発行事業者</span><span>2 / 2</span></div>
+      <div class="inv-emp-block">
+        <div class="inv-emp-block-title">${esc(emp.name)}${part}<span>日給 ${yen(emp.dailyWage)}／残業 ${yen(Math.round(otRate))}/h${nightOn?`　夜間 ${yen(emp.nightWage||0)}／夜残業 ${yen(Math.round(otRateN))}/h`:''}</span></div>
+        <table class="inv-detail">
+          <thead><tr><th class="inv-l">日付</th><th class="inv-c">区分</th><th class="inv-c">出勤</th><th>人工代</th><th>残業代</th><th>車代</th><th>計</th></tr></thead>
+          <tbody>${rows}${totalRow}</tbody>
+        </table>
+      </div>
+      ${foot(idx+2)}
     </div>
   </div>`;
+  }).join('');
 
-  return `<style>${css}</style>${page1}${page2}`;
+  return `<style>${css}</style>${page1}${detailPages}`;
 }
 
 /* 注意: PRINT_CSS と SCREEN_CSS は同時にDOMへ挿入されるため、
@@ -1037,6 +1082,9 @@ const PRINT_CSS=`
 #print-root .inv-page table.inv-detail thead th{font-size:7.5pt;padding:0 2mm 1.8mm;}
 #print-root .inv-page table.inv-detail tbody td{font-size:8pt;padding:1.8mm 2mm;}
 #print-root .inv-detail .inv-total-row td{border-top:1.2pt solid #1a2744;border-bottom:none;font-weight:700;color:#1a2744;font-size:8.5pt;background:none!important;padding-top:2.4mm;}
+/* 万一シートが用紙をまたいでも、行が途中で分断されずヘッダが継続表示されるように */
+#print-root .inv-page tr{break-inside:avoid;page-break-inside:avoid;}
+#print-root .inv-page thead{display:table-header-group;}
 #print-root .inv-night-tag{display:inline-block;font-size:6.5pt;color:#5b46c9;border:0.5pt solid #b9aef0;border-radius:2mm;padding:0.2mm 1.6mm;margin-left:1mm;vertical-align:middle;}
 #print-root .inv-bold{font-weight:700;color:#1a2744;}
 @page{size:A4;margin:0;}
@@ -1046,7 +1094,9 @@ const PRINT_CSS=`
 const SCREEN_CSS=`
 #pv-scroll *{margin:0;padding:0;box-sizing:border-box;}
 #pv-scroll{font-family:'Hiragino Mincho ProN','Yu Mincho',serif;color:#1c1c1e;}
-#pv-scroll .inv-page{width:100%;max-width:760px;min-height:auto;background:#fff;border-radius:4px;box-shadow:0 10px 40px rgba(15,20,40,.35),0 2px 8px rgba(15,20,40,.18);overflow:hidden;}
+/* flex-shrink:0 は必須。#pv-scroll は縦フレックスなので、既定の flex-shrink:1 だと
+   ページの高さが圧縮され overflow:hidden で中身が切り取られる（プレビュー途中切れの原因） */
+#pv-scroll .inv-page{width:100%;max-width:760px;min-height:auto;flex-shrink:0;background:#fff;border-radius:4px;box-shadow:0 10px 40px rgba(15,20,40,.35),0 2px 8px rgba(15,20,40,.18);overflow:hidden;}
 #pv-scroll .inv-topbar{height:6px;background:linear-gradient(90deg,#1a2744 0%,#2c3e63 100%);}
 #pv-scroll .inv-inner{padding:26px 22px 30px;}
 #pv-scroll .inv-p1-top{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:26px;gap:10px;}
