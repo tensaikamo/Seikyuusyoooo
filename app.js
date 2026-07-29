@@ -272,17 +272,36 @@ async function migrate(){
 }
 
 /* ---------- TABS ---------- */
-function switchTab(t){
+/* View Transitions API（対応端末のみ）でタブ切替をネイティブ級の遷移にする。
+   非対応・モーション低減設定では従来どおり即時切替になる。 */
+const TAB_ORDER=['home','att','bill','set'];
+let curTab='home';
+function withViewTransition(fn,dir){
+  const de=document.documentElement;
+  if(!document.startViewTransition||matchMedia('(prefers-reduced-motion: reduce)').matches){fn();return;}
+  if(dir)de.dataset.vt=dir;
+  try{
+    document.startViewTransition(fn).finished.finally(()=>{delete de.dataset.vt;});
+  }catch(e){delete de.dataset.vt;fn();}
+}
+function applyTab(t){
   document.querySelectorAll('.page').forEach(p=>p.classList.remove('active'));
-  document.querySelectorAll('.tb').forEach(b=>b.classList.remove('active'));
+  document.querySelectorAll('.tb').forEach(b=>{b.classList.remove('active');b.removeAttribute('aria-current');});
   $('page-'+t).classList.add('active');
   $('tb-'+t).classList.add('active');
+  $('tb-'+t).setAttribute('aria-current','page');
   const cfg={home:['ホーム','DASHBOARD',false],att:['日給管理','ATTENDANCE',true],bill:['請求','INVOICE',false],set:['設定','SETTINGS',false]};
   $('ph-name').textContent=cfg[t][0]; $('ph-sub').textContent=cfg[t][1];
   $('ph-month').style.display=cfg[t][2]?'flex':'none';
   if(t==='home')renderDash();
   if(t==='bill')renderBill();
   if(t==='set')renderSettingsLists();
+}
+function switchTab(t){
+  const from=TAB_ORDER.indexOf(curTab),to=TAB_ORDER.indexOf(t);
+  const dir=(from<0||to<0||from===to)?null:(to>from?'fwd':'back');
+  curTab=t;
+  withViewTransition(()=>applyTab(t),dir);
 }
 window.switchTab=switchTab;
 $('tb-home').addEventListener('click',()=>switchTab('home'));
