@@ -319,6 +319,20 @@ i.dot-night{background:var(--night);}
 .edititem .ei-wage{font-size:var(--fs-sm);color:var(--sub);}
 .edititem button{min-width:32px;min-height:32px;background:none;border:none;color:var(--mut);cursor:pointer;font-size:.95rem;}
 .data-btns{display:flex;flex-direction:column;gap:9px;}
+/* ===== 発行履歴（電子帳簿保存法） ===== */
+.ebook-note{font-size:var(--fs-xs);color:var(--sub);line-height:1.7;background:#f4f7fc;border-left:3px solid var(--chart-blue);border-radius:0 8px 8px 0;padding:9px 11px;margin-bottom:11px;text-wrap:pretty;}
+.log-item{border:1px solid var(--line);border-radius:11px;padding:11px 12px;margin-bottom:8px;background:#fafbfd;}
+.log-item.void{opacity:.62;}
+.log-top{display:flex;align-items:baseline;justify-content:space-between;gap:8px;}
+.log-no{font-size:var(--fs-xs);color:var(--mut);font-weight:700;letter-spacing:.04em;}
+.log-amt{font-size:var(--fs-md);font-weight:800;color:var(--navy-2);}
+.log-item.void .log-amt{text-decoration:line-through;}
+.log-meta{font-size:var(--fs-xs);color:var(--sub);margin-top:3px;line-height:1.6;}
+.log-tag{display:inline-block;font-size:.58rem;font-weight:800;color:#fff;background:var(--danger);border-radius:4px;padding:1px 5px;margin-left:6px;vertical-align:middle;}
+.log-btns{display:flex;gap:7px;margin-top:9px;}
+.log-btns button{flex:1;min-height:36px;border-radius:9px;font-size:var(--fs-xs);font-weight:700;cursor:pointer;border:1px solid var(--line-2);background:#fff;color:var(--ink);transition:transform var(--dur-1) var(--snap);}
+.log-btns button:active{transform:scale(.96);}
+.log-btns button.danger{color:var(--danger);border-color:rgba(220,38,38,.35);background:transparent;}
 .verrow{display:flex;align-items:center;justify-content:space-between;font-size:var(--fs-sm);color:var(--sub);}
 
 /* ===== MODAL ===== */
@@ -497,6 +511,13 @@ html[data-vt="back"]::view-transition-new(root){animation-name:vt-in-l;}
           <div><label class="fl">締め日</label><select id="set-closing"></select></div>
         </div>
         <div class="field"><label class="fl">車代の初期値（円）</label><input type="number" id="set-transport" inputmode="numeric" placeholder="1000"></div>
+      </div>
+      <!-- 発行履歴（電子帳簿保存法） -->
+      <div class="card">
+        <div class="card-t">請求書の発行履歴</div>
+        <div class="ebook-note">電子帳簿保存法に対応するため、発行した請求書は<b>発行時点の内容のまま</b>保存されます。記録は削除できず、取り消す場合は取消記録が追記されます。</div>
+        <div id="log-list"></div>
+        <button class="btn btn-ghost btn-sm" id="rule-btn" type="button" style="margin-top:10px;">事務処理規程をつくる</button>
       </div>
       <!-- データ -->
       <div class="card">

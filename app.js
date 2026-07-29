@@ -30,6 +30,7 @@ let STATE={
   employees:[],      // {id,name,dailyWage,nightWage,createdAt}
   records:[],        // {id,employeeId,date,attendance,overtimeHours,nightAttendance,nightOvertimeHours,transportFee,note}
   settings:JSON.parse(JSON.stringify(DEFAULT_SETTINGS)),
+  invoiceLog:[],     // 発行履歴（電子帳簿保存法）。追記のみ・削除しない
   ready:false
 };
 let viewY=new Date().getFullYear(), viewM=new Date().getMonth()+1; // 1-12
@@ -62,6 +63,7 @@ function idx(){
 const saveEmployees=()=>{invalidateIdx();return idbSet('employees',STATE.employees);};
 const saveRecords=()=>{invalidateIdx();return idbSet('records',STATE.records);};
 const saveSettings=()=>idbSet('settings',STATE.settings);
+const saveInvoiceLog=()=>idbSet('invoiceLog',STATE.invoiceLog);
 const saveReady=()=>idbSet('ready',STATE.ready);
 
 /* ---------- utils ---------- */
@@ -235,11 +237,12 @@ window.addEventListener('load',boot);
 async function boot(){
   try{if(navigator.storage&&navigator.storage.persist){if(!(await navigator.storage.persisted()))await navigator.storage.persist();}}catch(e){}
   try{
-    const [emps,recs,set,ready]=await Promise.all([idbGet('employees'),idbGet('records'),idbGet('settings'),idbGet('ready')]);
+    const [emps,recs,set,ready,ilog]=await Promise.all([idbGet('employees'),idbGet('records'),idbGet('settings'),idbGet('ready'),idbGet('invoiceLog')]);
     if(emps)STATE.employees=emps;
     if(recs)STATE.records=recs;
     if(set)STATE.settings=mergeSettings(set);
     if(ready)STATE.ready=ready;
+    if(Array.isArray(ilog))STATE.invoiceLog=ilog;
     if(!ready) await migrate();
   }catch(e){toast('⚠️ データ読込エラー');}
   invalidateIdx();
@@ -847,15 +850,48 @@ function renderBill(){
 }
 
 /* ===== PDF ===== */
+/* ---------- 発行（電子帳簿保存法）---------- */
+/* 発行時点の内容をスナップショットとして保存する。あとで勤怠を直しても
+   発行済みの請求書の内容は変わらない（これが電帳法上も正しい挙動）。 */
+function buildIssue(reports,period,batch){
+  const s=STATE.settings;
+  let subtotal=0;reports.forEach(r=>subtotal+=r.rep.grandTotal);
+  const tax=calcTax(subtotal,s.taxRate);
+  return {
+    id:uid(), issuedAt:new Date().toISOString(),
+    invoiceNo:invoiceNoOf(reports,batch,billY,billM),
+    issueDate:fmtDateJ(ymd(new Date().getFullYear(),new Date().getMonth()+1,new Date().getDate())),
+    period:{start:period.start,end:period.end,label:period.label,periodLabel:period.periodLabel},
+    clientName:s.client.companyName||'（請求先未設定）',
+    issuerName:s.issuer.companyName||'',
+    subtotal, tax, taxRate:s.taxRate, total:subtotal+tax,
+    batch:!!batch, voided:false, voidReason:'',
+    snapshot:JSON.parse(JSON.stringify({settings:s,reports}))
+  };
+}
+/* 電帳法の検索要件（日付・金額・取引先）を満たすファイル名 */
+function issueFileName(o){
+  const d=(o.issuedAt||'').slice(0,10).replace(/-/g,'')||'00000000';
+  const cli=(o.clientName||'取引先').replace(/[\\/:*?"<>|\s]/g,'').slice(0,24);
+  return `${d}_${Math.round(o.total)}_${cli}`;
+}
+
+let pendingIssue=null;   // プレビュー中の請求書（保存・印刷を押した時点で履歴に記録）
+let pendingLogged=false; // 同じプレビューから二重に記録しないためのフラグ
+
 function makeInvoice(empId){
   const emp=STATE.employees.find(e=>e.id===empId);if(!emp)return;
   const s=STATE.settings;
   const period=billingPeriod(billY,billM,s.closingDay);
   const rep=periodReport(emp,period.start,period.end);
   if(rep.grandTotal<=0){toast('⚠️ データがありません');return;}
+  const reports=[{emp,rep}];
+  const issue=buildIssue(reports,period,false);
+  const opt={settings:s,invoiceNo:issue.invoiceNo,issueDate:issue.issueDate};
   showPreview(
-    buildInvoiceHTML([{emp,rep}],period,false,'screen'),
-    buildInvoiceHTML([{emp,rep}],period,false,'print')
+    buildInvoiceHTML(reports,period,false,'screen',opt),
+    buildInvoiceHTML(reports,period,false,'print',opt),
+    issue
   );
 }
 window.makeInvoice=makeInvoice;
@@ -865,28 +901,53 @@ $('batch-pdf-btn').addEventListener('click',()=>{
   const period=billingPeriod(billY,billM,s.closingDay);
   const reports=STATE.employees.map(e=>({emp:e,rep:periodReport(e,period.start,period.end)})).filter(x=>x.rep.grandTotal>0);
   if(!reports.length){toast('⚠️ データがありません');return;}
+  const issue=buildIssue(reports,period,true);
+  const opt={settings:s,invoiceNo:issue.invoiceNo,issueDate:issue.issueDate};
   showPreview(
-    buildInvoiceHTML(reports,period,true,'screen'),
-    buildInvoiceHTML(reports,period,true,'print')
+    buildInvoiceHTML(reports,period,true,'screen',opt),
+    buildInvoiceHTML(reports,period,true,'print',opt),
+    issue
   );
 });
 
-function showPreview(screenHTML,printHTML){
+function showPreview(screenHTML,printHTML,issue,alreadyLogged){
   $('pv-scroll').innerHTML=screenHTML;   // 画面用（幅フィット）
   $('print-root').innerHTML=printHTML;   // 印刷用（A4原寸）
+  pendingIssue=issue||null;
+  pendingLogged=!!alreadyLogged;
   $('pv-overlay').classList.add('show');
   $('pv-scroll').scrollTop=0;
 }
-$('pv-close').addEventListener('click',()=>$('pv-overlay').classList.remove('show'));
-$('pv-print').addEventListener('click',()=>{setTimeout(()=>{window.print();},60);});
+$('pv-close').addEventListener('click',()=>{$('pv-overlay').classList.remove('show');pendingIssue=null;});
+$('pv-print').addEventListener('click',()=>{
+  if(pendingIssue&&!pendingLogged){
+    STATE.invoiceLog.push(pendingIssue);
+    saveInvoiceLog();
+    pendingLogged=true;
+    renderInvoiceLog();
+    toast('発行履歴に記録しました');
+  }
+  // Safari は文書タイトルをPDFの既定ファイル名に使う。検索要件を満たす名前に一時的に差し替える
+  const prevTitle=document.title;
+  if(pendingIssue)document.title=issueFileName(pendingIssue);
+  setTimeout(()=>{
+    window.print();
+    setTimeout(()=>{document.title=prevTitle;},1000);
+  },60);
+});
 
 /* A4 2ページ請求書HTML（ネイビー×白・帳票風）
    cssMode: 'print'(A4原寸) または 'screen'(画面幅フィット) */
-function buildInvoiceHTML(reports,period,batch,cssMode){
-  const s=STATE.settings;
+function invoiceNoOf(reports,batch,y,m){
+  return batch?`${y}-${pad2(m)}-ALL`
+    :`${y}-${pad2(m)}-${(reports[0].emp.id).replace(/[^0-9]/g,'').slice(0,3).padStart(3,'0')||'001'}`;
+}
+/* opt で設定・請求番号・発行日を差し替えられる（発行履歴からの再表示に使う） */
+function buildInvoiceHTML(reports,period,batch,cssMode,opt){
+  const s=(opt&&opt.settings)||STATE.settings;
   const css=(cssMode==='screen')?SCREEN_CSS:PRINT_CSS;
-  const issueDate=fmtDateJ(ymd(new Date().getFullYear(),new Date().getMonth()+1,new Date().getDate()));
-  const invNo=batch?`${billY}-${pad2(billM)}-ALL`:`${billY}-${pad2(billM)}-${(reports[0].emp.id).replace(/[^0-9]/g,'').slice(0,3).padStart(3,'0')||'001'}`;
+  const issueDate=(opt&&opt.issueDate)||fmtDateJ(ymd(new Date().getFullYear(),new Date().getMonth()+1,new Date().getDate()));
+  const invNo=(opt&&opt.invoiceNo)||invoiceNoOf(reports,batch,billY,billM);
 
   let subtotal=0; reports.forEach(r=>subtotal+=r.rep.grandTotal);
   const tax=calcTax(subtotal,s.taxRate);
@@ -1196,6 +1257,7 @@ function bindSettings(){
   });
 }
 function renderSettingsLists(){
+  renderInvoiceLog();
   const list=$('set-emp-list');list.innerHTML='';
   if(!STATE.employees.length){list.innerHTML='<div style="font-size:.82rem;color:var(--mut);padding:4px 0;">従業員が登録されていません</div>';return;}
   STATE.employees.forEach(e=>{
@@ -1206,8 +1268,123 @@ function renderSettingsLists(){
 }
 $('set-add-emp').addEventListener('click',()=>openEmpModal(null));
 
+/* ---------- 発行履歴（電子帳簿保存法）---------- */
+function renderInvoiceLog(){
+  const list=$('log-list');if(!list)return;
+  if(!STATE.invoiceLog.length){
+    list.innerHTML='<div style="font-size:var(--fs-sm);color:var(--mut);padding:2px 0;">まだ発行履歴はありません<br>請求タブで請求書を「保存・印刷」すると記録されます</div>';
+    return;
+  }
+  list.innerHTML=STATE.invoiceLog.slice().reverse().map(o=>{
+    const dt=new Date(o.issuedAt);
+    const stamp=`${dt.getFullYear()}/${pad2(dt.getMonth()+1)}/${pad2(dt.getDate())} ${pad2(dt.getHours())}:${pad2(dt.getMinutes())}`;
+    return `<div class="log-item${o.voided?' void':''}">
+      <div class="log-top">
+        <span class="log-no">No. ${esc(o.invoiceNo)}${o.voided?'<span class="log-tag">取消済</span>':''}</span>
+        <span class="log-amt">${yen(o.total)}</span>
+      </div>
+      <div class="log-meta">${esc(o.clientName)} 御中　／　${esc(o.period.periodLabel)}<br>発行 ${stamp}　${esc(issueFileName(o))}${o.voided&&o.voidReason?'<br>取消理由：'+esc(o.voidReason):''}</div>
+      <div class="log-btns">
+        <button type="button" onclick="reopenIssue('${o.id}')">再表示・再印刷</button>
+        ${o.voided?'':`<button type="button" class="danger" onclick="voidIssue('${o.id}')">取り消す</button>`}
+      </div>
+    </div>`;
+  }).join('');
+}
+/* 履歴から再表示（発行時点のスナップショットから描画する） */
+function reopenIssue(id){
+  const o=STATE.invoiceLog.find(x=>x.id===id);
+  if(!o||!o.snapshot){toast('⚠️ 履歴が見つかりません');return;}
+  const {settings,reports}=o.snapshot;
+  const period={start:o.period.start,end:o.period.end,label:o.period.label,periodLabel:o.period.periodLabel};
+  const opt={settings,invoiceNo:o.invoiceNo,issueDate:o.issueDate};
+  showPreview(
+    buildInvoiceHTML(reports,period,o.batch,'screen',opt),
+    buildInvoiceHTML(reports,period,o.batch,'print',opt),
+    o,true   // 既に記録済みなので二重に記録しない
+  );
+}
+window.reopenIssue=reopenIssue;
+/* 取消は「削除」ではなく取消記録の追記で行う（真実性の確保要件） */
+function voidIssue(id){
+  const o=STATE.invoiceLog.find(x=>x.id===id);
+  if(!o||o.voided)return;
+  const reason=prompt('取り消す理由を入力してください（記録として残ります）');
+  if(reason===null)return;
+  o.voided=true;
+  o.voidReason=reason||'（理由未記入）';
+  o.voidedAt=new Date().toISOString();
+  STATE.invoiceLog.push({
+    id:uid(), issuedAt:o.voidedAt, invoiceNo:o.invoiceNo+'-取消',
+    issueDate:o.issueDate, period:o.period,
+    clientName:o.clientName, issuerName:o.issuerName,
+    subtotal:-o.subtotal, tax:-o.tax, taxRate:o.taxRate, total:-o.total,
+    batch:o.batch, voided:true, voidReason:o.voidReason, voidOf:o.id, snapshot:null
+  });
+  saveInvoiceLog();
+  renderInvoiceLog();
+  toast('取消記録を追記しました');
+}
+window.voidIssue=voidIssue;
+
+/* 事務処理規程（国税庁のひな形に沿った内容）を生成して保存 */
+$('rule-btn').addEventListener('click',()=>{
+  const s=STATE.settings;
+  const name=s.issuer.companyName||'（自社名を設定してください）';
+  const today=new Date();
+  const txt=`電子取引データの訂正及び削除の防止に関する事務処理規程
+
+（目的）
+第1条　この規程は、電子計算機を使用して作成する国税関係帳簿書類の保存方法の
+特例に関する法律第7条に定められた電子取引の取引情報に係る電磁的記録の保存
+義務を履行するため、${name}（以下「当方」という。）における電子取引の取引
+情報に係る電磁的記録の訂正及び削除の防止に関する事項を定め、その適正な保存
+を目的とする。
+
+（適用範囲）
+第2条　この規程は、当方の行う全ての電子取引に係る電磁的記録について適用する。
+
+（管理責任者）
+第3条　電子取引の取引情報に係る電磁的記録の管理責任者は、${name}の代表者と
+する。
+
+（電子取引の範囲）
+第4条　当方における電子取引の範囲は次のとおりとする。
+　一　電子メール及びメッセージアプリを利用した請求書等の授受
+　二　インターネット上のサービスを利用した請求書等の授受
+　三　アプリケーションにより作成し電磁的に交付した請求書等
+
+（取引データの保存）
+第5条　電子取引により授受した取引データは、取引の相手先、取引年月日及び取引
+金額により検索できる状態で保存する。ファイル名は「日付＿金額＿取引先」の
+形式とする。
+
+（対象データの訂正及び削除の禁止）
+第6条　保存する取引データについては、原則として訂正及び削除をしてはならない。
+
+（訂正削除を行う場合）
+第7条　業務処理上やむを得ない理由により訂正又は削除を行う場合は、管理責任者
+の承認を得たうえで、訂正又は削除の年月日、理由及び内容を記録として残し、
+当該記録を取引データと合わせて保存する。取消しを行う場合は、元の記録を
+削除せず、取消しの記録を追加することにより行う。
+
+（備考）
+本規程で定める記録は、当方が使用する「日給管理・請求書」アプリの発行履歴
+機能により、発行時点の内容のまま保存され、削除できない形で管理される。
+
+（附則）
+この規程は、${today.getFullYear()}年${today.getMonth()+1}月${today.getDate()}日から施行する。
+`;
+  const blob=new Blob([txt],{type:'text/plain;charset=utf-8'});
+  const url=URL.createObjectURL(blob);const a=document.createElement('a');
+  a.href=url;a.download='事務処理規程_電子取引データの訂正削除の防止.txt';
+  document.body.appendChild(a);a.click();document.body.removeChild(a);
+  setTimeout(()=>URL.revokeObjectURL(url),1500);
+  toast('事務処理規程を保存しました');
+});
+
 /* データ管理 */
-function buildBackup(){return JSON.stringify({app:'日給管理・請求書',version:APP_VERSION,exportedAt:new Date().toISOString(),employees:STATE.employees,records:STATE.records,settings:STATE.settings},null,2);}
+function buildBackup(){return JSON.stringify({app:'日給管理・請求書',version:APP_VERSION,exportedAt:new Date().toISOString(),employees:STATE.employees,records:STATE.records,settings:STATE.settings,invoiceLog:STATE.invoiceLog},null,2);}
 $('export-btn').addEventListener('click',()=>{
   const blob=new Blob([buildBackup()],{type:'application/json'});
   const url=URL.createObjectURL(blob);const a=document.createElement('a');
@@ -1224,8 +1401,9 @@ $('import-btn').addEventListener('click',()=>{
       if(Array.isArray(o.employees))STATE.employees=o.employees;
       if(Array.isArray(o.records))STATE.records=o.records;
       if(o.settings)STATE.settings=mergeSettings(o.settings);
+      if(Array.isArray(o.invoiceLog))STATE.invoiceLog=o.invoiceLog;
       STATE.ready=true;
-      await Promise.all([saveEmployees(),saveRecords(),saveSettings(),saveReady()]);
+      await Promise.all([saveEmployees(),saveRecords(),saveSettings(),saveInvoiceLog(),saveReady()]);
       toast('復元しました ✓');setTimeout(()=>location.reload(),700);
     }catch(e){toast('⚠️ ファイルを読めませんでした');}
   });
