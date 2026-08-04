@@ -54,6 +54,29 @@
   --shadow-sm:0 1px 2px rgba(15,27,51,.05),0 3px 12px rgba(15,27,51,.06);
   --shadow-md:0 2px 6px rgba(15,27,51,.07),0 14px 30px rgba(15,27,51,.10);
   --shadow-lg:0 8px 20px rgba(15,27,51,.16),0 28px 60px rgba(15,27,51,.22);
+  /* ヒーロー面で回す光の色 */
+  --mesh-a:#3d63c8;
+  --mesh-b:#7c5cff;
+  --mesh-c:#f6a41c;
+  /* 粒状感（feTurbulence で生成したノイズ）。ベタ塗り感を消す */
+  --grain:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.8' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='160' height='160' filter='url(%23n)' opacity='.42'/%3E%3C/svg%3E");
+}
+/* ===== Display P3 ワイドカラー =====
+   iPhoneの画面は P3。sRGB では表現できない鮮やかさが出る。
+   非対応環境では上の16進がそのまま使われる。 */
+@supports (color:color(display-p3 1 1 1)){
+  :root{
+    --amber:color(display-p3 .965 .645 .09);
+    --amber-d:color(display-p3 .84 .49 .02);
+    --danger:color(display-p3 .85 .145 .145);
+    --ok:color(display-p3 .086 .64 .29);
+    --night:color(display-p3 .355 .275 .78);
+    --chart-blue:color(display-p3 .247 .372 .655);
+    --chart-amber:color(display-p3 .84 .49 .02);
+    --mesh-a:color(display-p3 .24 .388 .784);
+    --mesh-b:color(display-p3 .486 .361 1);
+    --mesh-c:color(display-p3 .965 .645 .09);
+  }
 }
 /* 金額の数字専用フォント（Inter, SIL Open Font License 1.1 / https://github.com/rsms/inter）
    数字と ¥ など14文字だけにサブセット済み（woff2 実測 4KB）。外部リクエストは発生しない。
@@ -62,6 +85,28 @@
 @font-face{font-family:MoneyNum;src:url(data:font/woff2;base64,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) format('woff2');
   font-weight:400 900;font-style:normal;font-display:swap;
   unicode-range:U+25,U+2b-2e,U+30-39,U+a5;}
+/* ===== ヒーロー面の質感 =====
+   背景グラデーションそのものを動かすと毎フレーム再描画になり重い。
+   代わりに「光の塊」を1枚重ねて transform で回す＝合成のみで動くので負荷ゼロに近い。 */
+.mesh{position:absolute;inset:-32%;z-index:0;pointer-events:none;border-radius:50%;
+  background:
+    radial-gradient(circle at 34% 30%,color-mix(in oklab,var(--mesh-a) 78%,transparent) 0%,transparent 56%),
+    radial-gradient(circle at 70% 64%,color-mix(in oklab,var(--mesh-b) 62%,transparent) 0%,transparent 52%),
+    radial-gradient(circle at 54% 90%,color-mix(in oklab,var(--mesh-c) 34%,transparent) 0%,transparent 48%);
+  opacity:.42;
+  /* will-change は付けない。3枚のヒーロー面が常時レイヤーを確保してしまい、
+     タブ切替時の合成が重くなる（実測でp90が+7ms悪化した）。
+     animation 実行中はブラウザが自動でレイヤーを作るので不要。 */
+  animation:meshSpin 34s linear infinite;
+}
+@keyframes meshSpin{from{transform:rotate(0turn) scale(1.05);}to{transform:rotate(1turn) scale(1.05);}}
+/* 粒状感＋斜めのつや。静止レイヤーなので描画コストは初回のみ */
+.grain{position:absolute;inset:0;z-index:1;pointer-events:none;
+  background:var(--sheen),var(--grain);
+  background-size:auto,160px 160px;
+  opacity:.16;mix-blend-mode:overlay;}
+.hero-body{position:relative;z-index:2;}
+
 *{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent;}
 html{height:100%;}
 body{
@@ -99,7 +144,8 @@ svg.ic{fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;strok
   display:flex;align-items:center;justify-content:space-between;
   position:relative;z-index:5;box-shadow:0 6px 24px rgba(15,27,51,.22);
 }
-.ph::before{content:'';position:absolute;inset:0;background:radial-gradient(90% 170% at 100% 0%,rgba(122,150,255,.18),transparent 55%);pointer-events:none;}
+.ph::before{content:'';position:absolute;inset:0;background:radial-gradient(90% 170% at 100% 0%,rgba(122,150,255,.2),transparent 55%);pointer-events:none;}
+.ph::after{content:'';position:absolute;inset:0;background:var(--grain);background-size:160px 160px;opacity:.09;mix-blend-mode:overlay;pointer-events:none;}
 .ph>*{position:relative;z-index:1;}
 .ph-title{display:flex;flex-direction:column;gap:1px;}
 .ph-name{font-size:var(--fs-lg);font-weight:800;letter-spacing:.04em;}
@@ -248,8 +294,7 @@ i.dot-night{background:var(--night);}
   padding:14px 18px;margin-top:14px;display:flex;align-items:center;justify-content:space-between;
   box-shadow:var(--shadow-lg),inset 0 1px 0 rgba(255,255,255,.2);overflow:hidden;
 }
-.runbar::after{content:'';position:absolute;inset:0;background:var(--sheen),radial-gradient(110% 130% at 92% -20%,rgba(122,150,255,.3),transparent 55%);pointer-events:none;}
-.runbar>*{position:relative;z-index:1;}
+
 .runbar .rl{font-size:var(--fs-xs);opacity:.8;letter-spacing:.08em;}
 .runbar .rv{font-size:1.4rem;font-weight:800;}
 
@@ -267,18 +312,14 @@ i.dot-night{background:var(--night);}
 .sum-emp-detail{display:flex;flex-wrap:wrap;gap:4px 14px;font-size:var(--fs-sm);color:var(--sub);}
 .sum-emp-btn{margin-top:10px;}
 .grand{position:relative;overflow:hidden;background:var(--grad-hero);color:#fff;border-radius:18px;padding:20px 18px 18px;margin-bottom:12px;box-shadow:var(--shadow-md),inset 0 1px 0 rgba(255,255,255,.2);}
-.grand::before{content:'¥';position:absolute;right:-10px;top:-38px;font-size:9.5rem;font-weight:800;color:rgba(255,255,255,.05);line-height:1;pointer-events:none;}
-.grand::after{content:'';position:absolute;inset:0;background:var(--sheen),radial-gradient(120% 100% at 88% -12%,rgba(122,150,255,.3),transparent 55%);pointer-events:none;}
-.grand>*{position:relative;z-index:1;}
+.grand::before{content:'¥';position:absolute;right:-10px;top:-38px;font-size:9.5rem;font-weight:800;color:rgba(255,255,255,.07);line-height:1;pointer-events:none;z-index:1;}
 .grand-l{font-size:var(--fs-xs);opacity:.75;letter-spacing:.12em;margin-bottom:8px;}
 .grand-v{font-size:2.15rem;font-weight:800;letter-spacing:.01em;line-height:1.1;}
 .grand-sub{font-size:var(--fs-sm);opacity:.72;margin-top:8px;}
 
 /* ===== DASHBOARD ===== */
 .dash-hero{position:relative;overflow:hidden;background:var(--grad-hero);color:#fff;border-radius:18px;padding:20px 18px 18px;margin-bottom:12px;box-shadow:var(--shadow-md),inset 0 1px 0 rgba(255,255,255,.2);}
-.dash-hero::before{content:'¥';position:absolute;right:-10px;top:-38px;font-size:9.5rem;font-weight:800;color:rgba(255,255,255,.05);line-height:1;pointer-events:none;}
-.dash-hero::after{content:'';position:absolute;inset:0;background:var(--sheen),radial-gradient(120% 100% at 88% -12%,rgba(122,150,255,.3),transparent 55%);pointer-events:none;}
-.dash-hero>*{position:relative;z-index:1;}
+.dash-hero::before{content:'¥';position:absolute;right:-10px;top:-38px;font-size:9.5rem;font-weight:800;color:rgba(255,255,255,.07);line-height:1;pointer-events:none;z-index:1;}
 .dh-l{font-size:var(--fs-xs);opacity:.75;letter-spacing:.12em;margin-bottom:8px;}
 .dh-v{font-size:2.3rem;font-weight:800;line-height:1.1;font-variant-numeric:normal;font-feature-settings:normal;}
 .dh-row{display:flex;align-items:center;gap:9px;margin-top:9px;flex-wrap:wrap;}
@@ -364,6 +405,7 @@ i.dot-night{background:var(--night);}
 
 @media (prefers-reduced-motion: reduce){
   *,*::before,*::after{animation-duration:.01ms!important;transition-duration:.01ms!important;}
+  .mesh{animation:none!important;}
 }
 
 /* ===== 請求書プレビュー オーバーレイ ===== */
@@ -437,9 +479,12 @@ i.dot-night{background:var(--night);}
         <button class="period-nav" id="pd-next" type="button">›</button>
       </div>
       <div class="grand">
-        <div class="grand-l">請求合計（税込）</div>
-        <div class="grand-v" id="grand-v">¥ —</div>
-        <div class="grand-sub" id="grand-sub">全従業員の合計</div>
+        <i class="mesh"></i><i class="grain"></i>
+        <div class="hero-body">
+          <div class="grand-l">請求合計（税込）</div>
+          <div class="grand-v" id="grand-v">¥ —</div>
+          <div class="grand-sub" id="grand-sub">全従業員の合計</div>
+        </div>
       </div>
       <div id="sum-list"></div>
       <button class="btn btn-amber" id="batch-pdf-btn" type="button" style="margin-top:4px;"><svg class="ic" viewBox="0 0 24 24"><path d="M6.5 2.8h7.2L18.5 7.6v12.1a1.5 1.5 0 0 1-1.5 1.5H6.5A1.5 1.5 0 0 1 5 19.7V4.3a1.5 1.5 0 0 1 1.5-1.5z"/><path d="M13.6 2.8v4.9h4.9"/><path d="M8.5 13h7M8.5 16.5h4.5"/></svg>まとめ請求書をPDFで作る</button>

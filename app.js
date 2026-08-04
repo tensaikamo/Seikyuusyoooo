@@ -485,9 +485,12 @@ function renderDash(){
 
   body.innerHTML=`
     <div class="dash-hero">
-      <div class="dh-l">今月の売上（${Y}年${M}月・暦月）</div>
-      <div class="dh-v" id="dash-v">${yenHTML(0)}</div>
-      <div class="dh-row">${badge}<span class="dh-sub">先月 ${yen(prev)}</span></div>
+      <i class="mesh"></i><i class="grain"></i>
+      <div class="hero-body">
+        <div class="dh-l">今月の売上（${Y}年${M}月・暦月）</div>
+        <div class="dh-v" id="dash-v">${yenHTML(0)}</div>
+        <div class="dh-row">${badge}<span class="dh-sub">先月 ${yen(prev)}</span></div>
+      </div>
     </div>
     <div class="stat-grid">
       <div class="stat"><div class="stat-l">出勤（人工）</div><div class="stat-v">${att}<small>人工</small></div></div>
@@ -718,7 +721,10 @@ function renderAtt(){
 
   const cheer=runTotal===0?'今月はこれから':runTotal<100000?'コツコツ積み上げ中':runTotal<300000?'今月もお疲れさま':'おっ、いい月だ';
   const seed=(lastRunTotal==null)?0:lastRunTotal;
-  html+=`<div class="runbar"><div><div class="rl">${viewY}年${viewM}月 合計（暦月）</div><div class="rcheer">${cheer}</div></div><span class="rv" id="run-v">${yenHTML(seed)}</span></div>`;
+  html+=`<div class="runbar"><i class="mesh"></i><i class="grain"></i>
+    <div class="hero-body" style="display:flex;align-items:center;justify-content:space-between;width:100%;">
+    <div><div class="rl">${viewY}年${viewM}月 合計（暦月）</div><div class="rcheer">${cheer}</div></div>
+    <span class="rv" id="run-v">${yenHTML(seed)}</span></div></div>`;
   body.innerHTML=html;
   animateYen($('run-v'),runTotal);
   lastRunTotal=runTotal;
