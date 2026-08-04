@@ -21,7 +21,7 @@ function uid(){return Date.now().toString(36)+Math.random().toString(36).slice(2
 /* ---------- STATE ---------- */
 const WEEK=['日','月','火','水','木','金','土'];
 const DEFAULT_SETTINGS={
-  defaultTransportFee:1000,taxRate:10,closingDay:31,
+  defaultTransportFee:1000,taxRate:10,closingDay:31,monthlyGoal:0,
   issuer:{companyName:'',postalCode:'',address:'',phone:'',invoiceNumber:''},
   client:{companyName:'',postalCode:'',address:'',contactName:''},
   bank:{bankName:'',branchName:'',accountType:'普通',accountNumber:'',accountHolder:''}
@@ -48,7 +48,8 @@ let editEmpId=null;    // モーダル編集対象
    レコードのループ内で employees.find() を呼ぶと O(レコード数 × 従業員数) になり、
    数年分たまると体感で遅くなる。従業員IDでの索引を作って使い回し、保存時に破棄する。 */
 let _idx=null;
-function invalidateIdx(){_idx=null;}
+let dashDirty=true;   // データが変わったときだけダッシュボードを作り直す
+function invalidateIdx(){_idx=null;dashDirty=true;}
 function idx(){
   if(_idx)return _idx;
   const empById=new Map(STATE.employees.map(e=>[e.id,e]));
@@ -62,7 +63,7 @@ function idx(){
 
 const saveEmployees=()=>{invalidateIdx();return idbSet('employees',STATE.employees);};
 const saveRecords=()=>{invalidateIdx();return idbSet('records',STATE.records);};
-const saveSettings=()=>idbSet('settings',STATE.settings);
+const saveSettings=()=>{dashDirty=true;return idbSet('settings',STATE.settings);};
 const saveInvoiceLog=()=>idbSet('invoiceLog',STATE.invoiceLog);
 const saveReady=()=>idbSet('ready',STATE.ready);
 
@@ -398,6 +399,38 @@ let dashMonths=[]; // 直近12ヶ月 [{key,y,m,total}]
 const CHART={W:344,H:170,padL:34,padR:6,padT:16,padB:18,n:12};
 CHART.bandW=(CHART.W-CHART.padL-CHART.padR)/CHART.n;
 function chartBandCenter(i){return CHART.padL+i*CHART.bandW+CHART.bandW/2;}
+/* グラフ共通の定義。文書に1つだけ置き、各SVGからidで参照する。
+   SVGごとにdefsを複製するとID衝突と再ラスタライズでタブ切替が重くなる（実測でp90が+40ms）。
+   ぼかしフィルタ（feGaussianBlur）も同じ理由で使わず、グラデーションの明度で発光を表現する。 */
+function chartDefsOnce(){
+  return `<svg width="0" height="0" style="position:absolute" aria-hidden="true"><defs>
+    <linearGradient id="gBar" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#6484d6"/><stop offset="1" stop-color="#2e4a8c"/>
+    </linearGradient>
+    <linearGradient id="gCur" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffc24d"/><stop offset="1" stop-color="#d97e06"/>
+    </linearGradient>
+    <linearGradient id="gArea" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#4f74c8" stop-opacity=".42"/>
+      <stop offset="1" stop-color="#4f74c8" stop-opacity="0"/>
+    </linearGradient>
+    <linearGradient id="gRing" x1="0" y1="1" x2="1" y2="0">
+      <stop offset="0" stop-color="#3f5fa7"/><stop offset=".6" stop-color="#6c8ee0"/><stop offset="1" stop-color="#ffc24d"/>
+    </linearGradient>
+  </defs></svg>`;
+}
+/* 点列を滑らかな曲線に変換（Catmull-Rom を3次ベジェへ） */
+function smoothPath(pts){
+  if(pts.length<2)return '';
+  let d=`M${pts[0][0]} ${pts[0][1]}`;
+  for(let i=0;i<pts.length-1;i++){
+    const p0=pts[i-1]||pts[i],p1=pts[i],p2=pts[i+1],p3=pts[i+2]||pts[i+1];
+    const c1x=p1[0]+(p2[0]-p0[0])/6, c1y=p1[1]+(p2[1]-p0[1])/6;
+    const c2x=p2[0]-(p3[0]-p1[0])/6, c2y=p2[1]-(p3[1]-p1[1])/6;
+    d+=` C${c1x.toFixed(1)} ${c1y.toFixed(1)},${c2x.toFixed(1)} ${c2y.toFixed(1)},${p2[0]} ${p2[1]}`;
+  }
+  return d;
+}
 function buildBarChart(){
   const {W,H,padL,padR,padT,padB}=CHART;
   const plotW=W-padL-padR,plotH=H-padT-padB;
@@ -417,7 +450,7 @@ function buildBarChart(){
     const y=padT+plotH-h;
     const curM=(i===11);
     if(m.total>0)
-      bars+=`<path class="bar" style="animation-delay:${i*35}ms" d="${barPath(x,y,barW,h,4)}" fill="${curM?CHART_AMBER:CHART_BLUE}"/>`;
+      bars+=`<path class="bar${animClass('anim')}" style="animation-delay:${i*35}ms" d="${barPath(x,y,barW,h,4)}" fill="url(#${curM?'gCur':'gBar'})"/>`;
     labels+=`<text x="${chartBandCenter(i)}" y="${H-5}" text-anchor="middle" font-size="8.5" fill="${curM?'#5d6675':'#97a0af'}" font-weight="${curM?'700':'400'}">${m.m}月</text>`;
     if(curM&&m.total>0)
       labels+=`<text x="${chartBandCenter(i)}" y="${y-5}" text-anchor="middle" font-size="9.5" font-weight="700" fill="#5d6675">${fmtMan(m.total)}</text>`;
@@ -425,6 +458,76 @@ function buildBarChart(){
   });
   return `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="月別売上の棒グラフ"><g>${grid}</g><g class="bars">${bars}</g><g>${labels}</g><g>${hits}</g></svg>`;
 }
+/* 今月の日別累計（棒グラフとは別の切り口：月がどう積み上がっているか） */
+function monthCumulative(Y,M){
+  const {empById}=idx();
+  const pad=pad2, km=`${Y}-${pad(M)}`;
+  const byDay=new Map();
+  STATE.records.forEach(r=>{
+    if(!r.date.startsWith(km)||!recHasData(r))return;
+    const emp=empById.get(r.employeeId);
+    if(!emp)return;
+    const d=+r.date.slice(8,10);
+    byDay.set(d,(byDay.get(d)||0)+dailyTotal(r,emp).total);
+  });
+  const dim=new Date(Y,M,0).getDate();
+  const today=new Date();
+  const upto=(today.getFullYear()===Y&&today.getMonth()+1===M)?today.getDate():dim;
+  const out=[];let acc=0;
+  for(let d=1;d<=upto;d++){acc+=byDay.get(d)||0;out.push({d,acc});}
+  return {points:out,dim,total:acc};
+}
+/* 今月の積み上がりを滑らかな曲線＋グラデーション塗りで描く */
+function buildAreaChart(Y,M,goal){
+  const W=344,H=124,padL=6,padR=6,padT=12,padB=18;
+  const {points,dim}=monthCumulative(Y,M);
+  if(points.length<2)return '';
+  const plotW=W-padL-padR,plotH=H-padT-padB;
+  // 目標も収まる縦軸にする（月末までの空白に「目標ペース」の意味を持たせる）
+  const yMax=niceCeil(Math.max(...points.map(p=>p.acc),goal||0,1));
+  const px=d=>padL+(d-1)/(dim-1)*plotW;
+  const py=v=>padT+plotH-(v/yMax*plotH);
+  const pts=points.map(p=>[+px(p.d).toFixed(1),+py(p.acc).toFixed(1)]);
+  const line=smoothPath(pts);
+  const area=`${line} L${pts[pts.length-1][0]} ${padT+plotH} L${pts[0][0]} ${padT+plotH} Z`;
+  const last=pts[pts.length-1];
+  const lastVal=points[points.length-1].acc;
+  let grid='';
+  [0,yMax].forEach(t=>{const y=py(t);
+    grid+=`<line x1="${padL}" y1="${y}" x2="${W-padR}" y2="${y}" stroke="#e7ebf2" stroke-width="1"/>`;});
+  // 目標ペース：月初0から月末に目標へ届く直線。今の位置が先行/遅れか一目で分かる
+  const pace=goal>0?`<line x1="${px(1)}" y1="${py(0)}" x2="${px(dim)}" y2="${py(goal)}"
+      stroke="#b9c6de" stroke-width="1.6" stroke-dasharray="4 4"/>
+    <text x="${W-padR}" y="${py(goal)-5}" text-anchor="end" font-size="8.5" fill="#6c7585">目標ペース</text>`:'';
+  return `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="今月の売上の積み上がりと目標ペース">
+    <g>${grid}</g>${pace}
+    <path d="${area}" fill="url(#gArea)" class="area-fill${animClass('anim')}"/>
+    <path d="${line}" fill="none" stroke="#4f74c8" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" class="area-line${animClass('anim')}"/>
+    <circle cx="${last[0]}" cy="${last[1]}" r="4.2" fill="#fff" stroke="#4f74c8" stroke-width="2.4"/>
+    <text x="${Math.min(W-padR-4,Math.max(padL+22,last[0]))}" y="${Math.max(11,last[1]-10)}" text-anchor="middle" font-size="9.5" font-weight="700" fill="#4d5566">${fmtMan(lastVal)}</text>
+    <text x="${padL}" y="${H-5}" font-size="8.5" fill="#6c7585">1日</text>
+    <text x="${W-padR}" y="${H-5}" text-anchor="end" font-size="8.5" fill="#6c7585">${dim}日</text>
+  </svg>`;
+}
+/* 月間目標に対する達成率のリングゲージ。
+   軌道は同じ色相の淡い段階（dataviz のメーター規則）にする */
+function buildRing(cur,goal){
+  const S=104,cx=S/2,cy=S/2,r=41,c=2*Math.PI*r;
+  const p=goal>0?Math.min(1.35,cur/goal):0;
+  const off=c*(1-Math.min(1,p));
+  const pct=goal>0?Math.round(cur/goal*100):0;
+  return `<svg viewBox="0 0 ${S} ${S}" class="ring" role="img" aria-label="月間目標の達成率 ${pct}パーセント">
+    <circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="#dde5f3" stroke-width="9"/>
+    <circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="url(#gRing)" stroke-width="9" stroke-linecap="round"
+      stroke-dasharray="${c.toFixed(1)}" stroke-dashoffset="${off.toFixed(1)}"
+      transform="rotate(-90 ${cx} ${cy})" class="ring-fill${animClass('anim')}"/>
+    <text x="${cx}" y="${cy-1}" text-anchor="middle" font-size="21" font-weight="800" fill="#141a26">${pct}</text>
+    <text x="${cx}" y="${cy+14}" text-anchor="middle" font-size="9" font-weight="700" fill="#6c7585">%</text>
+  </svg>`;
+}
+
+let dashAnimated=false;   // グラフの描画アニメーションはセッション初回のみ再生する
+function animClass(name){return dashAnimated?'':' '+name;}
 let dashTipTimer=null;
 function dashTip(i){
   const m=dashMonths[i];const tip=$('dash-tip');
@@ -441,6 +544,12 @@ window.dashTip=dashTip;
 function renderDash(){
   const body=$('dash-body');
   if(!body)return;
+  // データも表示月も変わっていないなら作り直さない（タブを行き来するたびに
+  // 3つのグラフを再生成すると切替の最長フレームが伸びる）
+  const now0=new Date();
+  const stamp=`${now0.getFullYear()}-${now0.getMonth()+1}`;
+  if(!dashDirty&&body.dataset.stamp===stamp&&body.childElementCount)return;
+  body.dataset.stamp=stamp;
   if(!STATE.employees.length){
     body.innerHTML=`<div class="card"><div class="empty">まだデータがありません<br>従業員を登録して勤怠をつけると<br>ここに売上ダッシュボードが表示されます</div>
       <button class="btn btn-navy" onclick="switchTab('att')">勤怠をつけはじめる</button></div>`;
@@ -457,6 +566,13 @@ function renderDash(){
   }
   const cur=dashMonths[11].total;
   const prev=dashMonths[10].total;
+  // 月間目標。未設定なら直近3ヶ月（データのある月）の平均を目安として使う
+  let goal=Number(STATE.settings.monthlyGoal)||0;
+  let goalAuto=false;
+  if(goal<=0){
+    const past=dashMonths.slice(8,11).map(m=>m.total).filter(v=>v>0);
+    if(past.length){goal=Math.round(past.reduce((a,b)=>a+b,0)/past.length);goalAuto=true;}
+  }
   let badge;
   if(prev>0&&cur>0){
     const pct=Math.round((cur-prev)/prev*100);
@@ -487,7 +603,7 @@ function renderDash(){
     .filter(x=>x.total>0).sort((a,b)=>b.total-a.total);
   const maxEmp=perEmp.length?perEmp[0].total:0;
 
-  body.innerHTML=`
+  body.innerHTML=`${chartDefsOnce()}
     <div class="dash-hero">
       <i class="mesh"></i><i class="grain"></i>
       <div class="hero-body">
@@ -502,9 +618,21 @@ function renderDash(){
       <div class="stat"><div class="stat-l">稼働日の平均</div><div class="stat-v">${fmtMan(avg)}<small>円/日</small></div></div>
       <div class="stat"><div class="stat-l">これまでの累計</div><div class="stat-v">${fmtMan(cum)}<small>円</small></div></div>
     </div>
+    <div class="card ring-card">
+      <div class="ring-slot" data-chart="ring"></div>
+      <div class="ring-info">
+        <div class="card-t" style="margin-bottom:6px;">今月の目標</div>
+        <div class="ring-goal">${goal>0?yen(goal):'未設定'}${goalAuto?'<span class="ring-auto">直近3ヶ月の平均</span>':''}</div>
+        <div class="ring-rest">${goal>cur?`あと ${yen(goal-cur)}`:goal>0?'目標達成':'設定タブで決められます'}</div>
+      </div>
+    </div>
     <div class="card">
       <div class="card-t">月別売上（直近12ヶ月）</div>
-      <div class="chart-wrap">${buildBarChart()}<div class="chart-tip" id="dash-tip"></div></div>
+      <div class="chart-wrap ph-bar" data-chart="bar"></div>
+    </div>
+    <div class="card">
+      <div class="card-t">今月の積み上がり</div>
+      <div class="chart-wrap ph-area" data-chart="area"></div>
     </div>
     <div class="card">
       <div class="card-t">従業員別（今月）</div>
@@ -515,6 +643,17 @@ function renderDash(){
       :'<div style="font-size:var(--fs-sm);color:var(--mut);">今月の勤怠データはまだありません</div>'}
     </div>`;
   animateYen($('dash-v'),cur);
+  // グラフは切替アニメーションが終わった次のフレームで描く（切替の最長フレームを伸ばさない）
+  requestAnimationFrame(()=>{
+    const bar=body.querySelector('[data-chart="bar"]');
+    if(bar)bar.innerHTML=buildBarChart()+'<div class="chart-tip" id="dash-tip"></div>';
+    const area=body.querySelector('[data-chart="area"]');
+    if(area)area.innerHTML=buildAreaChart(Y,M,goal);
+    const ring=body.querySelector('[data-chart="ring"]');
+    if(ring)ring.innerHTML=buildRing(cur,goal);
+    dashAnimated=true;
+  });
+  dashDirty=false;
 }
 
 /* ===== 勤怠タブ ===== */
@@ -1340,7 +1479,7 @@ function loadSettingsForm(){
   $('iss-name').value=s.issuer.companyName;$('iss-zip').value=s.issuer.postalCode;$('iss-tel').value=s.issuer.phone;$('iss-addr').value=s.issuer.address;$('iss-invno').value=s.issuer.invoiceNumber;
   $('cli-name').value=s.client.companyName;$('cli-zip').value=s.client.postalCode;$('cli-contact').value=s.client.contactName;$('cli-addr').value=s.client.address;
   $('bk-bank').value=s.bank.bankName;$('bk-branch').value=s.bank.branchName;$('bk-type').value=s.bank.accountType;$('bk-num').value=s.bank.accountNumber;$('bk-holder').value=s.bank.accountHolder;
-  $('set-tax').value=String(s.taxRate);$('set-closing').value=String(s.closingDay);$('set-transport').value=s.defaultTransportFee;
+  $('set-tax').value=String(s.taxRate);$('set-closing').value=String(s.closingDay);$('set-transport').value=s.defaultTransportFee;$('set-goal').value=s.monthlyGoal||'';
 }
 function bindSettings(){
   const m=[
@@ -1355,6 +1494,7 @@ function bindSettings(){
     ['set-tax',v=>STATE.settings.taxRate=parseInt(v,10)||0],
     ['set-closing',v=>STATE.settings.closingDay=parseInt(v,10)||31],
     ['set-transport',v=>STATE.settings.defaultTransportFee=parseInt(v,10)||0],
+    ['set-goal',v=>STATE.settings.monthlyGoal=parseInt(v,10)||0],
   ];
   m.forEach(([id,fn])=>{
     const el=$(id);const ev=(el.tagName==='SELECT')?'change':'input';

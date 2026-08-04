@@ -343,8 +343,28 @@ i.dot-night{background:var(--night);}
 .dh-badge.flat{color:rgba(255,255,255,.75);}
 .dh-sub{font-size:var(--fs-xs);opacity:.7;}
 .chart-wrap{position:relative;}
+/* ダッシュボードのカードは描画を隔離する。1枚の再描画が他へ波及しない */
+#dash-body>.card{contain:content;}
+/* グラフを後から差し込むあいだ枠を確保しておく（レイアウトのずれ防止） */
+.ph-bar{aspect-ratio:344/170;}
+.ph-area{aspect-ratio:344/124;}
+.ring-slot{width:104px;height:104px;flex-shrink:0;}
+/* リングゲージのカード */
+.ring-card{display:flex;align-items:center;gap:16px;}
+.ring{width:104px;height:104px;flex-shrink:0;}
+.ring-fill.anim{animation:ringDraw 1.1s var(--ease) both;}
+@keyframes ringDraw{from{stroke-dashoffset:258;}}
+.ring-info{flex:1;min-width:0;}
+.ring-goal{font-size:var(--fs-lg);font-weight:800;font-variant-numeric:normal;}
+.ring-auto{display:block;font-size:var(--fs-xs);color:var(--mut);font-weight:600;margin-top:2px;}
+.ring-rest{font-size:var(--fs-sm);color:var(--sub);margin-top:6px;}
+/* 積み上がり曲線の描画アニメーション */
+.area-line.anim{stroke-dasharray:1400;stroke-dashoffset:1400;animation:draw 1.2s var(--ease) .15s forwards;}
+.area-fill.anim{opacity:0;animation:fadeIn .8s ease .5s forwards;}
+@keyframes fadeIn{to{opacity:1;}}
 .chart-wrap svg{display:block;width:100%;height:auto;}
-.bars .bar{transform-box:fill-box;transform-origin:bottom;animation:barUp .55s var(--ease) backwards;}
+.bars .bar{transform-box:fill-box;transform-origin:bottom;}
+.bars .bar.anim{animation:barUp .55s var(--ease) backwards;}
 @keyframes barUp{from{transform:scaleY(0);}to{transform:scaleY(1);}}
 .chart-tip{position:absolute;top:0;transform:translateX(-50%);background:rgba(15,27,51,.94);color:#fff;font-size:var(--fs-xs);font-weight:700;padding:5px 10px;border-radius:8px;white-space:nowrap;pointer-events:none;opacity:0;transition:opacity var(--dur-1);box-shadow:0 6px 16px rgba(0,0,0,.25);}
 .chart-tip.show{opacity:1;}
@@ -574,6 +594,7 @@ i.dot-night{background:var(--night);}
           <div><label class="fl">締め日</label><select id="set-closing"></select></div>
         </div>
         <div class="field"><label class="fl">車代の初期値（円）</label><input type="number" id="set-transport" inputmode="numeric" placeholder="1000"></div>
+        <div class="field"><label class="fl">月間の売上目標（円）<span style="color:var(--mut);font-weight:400;">／空欄なら直近3ヶ月の平均</span></label><input type="number" id="set-goal" inputmode="numeric" placeholder="例：500000"></div>
       </div>
       <!-- 発行履歴（電子帳簿保存法） -->
       <div class="card">
