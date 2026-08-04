@@ -3,7 +3,7 @@
    日給管理・請求書 — iPhone単一HTML版（依存ゼロ）
    ネイビー×白 / IndexedDB / A4 2ページPDF
    ============================================================= */
-const APP_VERSION='1.5.1';
+const APP_VERSION='1.6.0';
 
 /* ---------- HTML escape ---------- */
 function esc(s){return String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
@@ -526,6 +526,35 @@ function buildRing(cur,goal){
   </svg>`;
 }
 
+/* ---------- 空状態のイラスト（職人・現場のモチーフ）---------- */
+const ART={
+  // ヘルメットと工具：まだ誰も登録されていない状態
+  att:`<svg class="art" viewBox="0 0 160 116" aria-hidden="true">
+    <ellipse cx="80" cy="103" rx="52" ry="7" fill="#e3e9f4"/>
+    <path d="M34 78a46 46 0 0 1 92 0z" fill="#dfe7f6" stroke="#9fb3d9" stroke-width="2.4" stroke-linejoin="round"/>
+    <path d="M80 32v-6M62 40l-4-5M98 40l4-5" stroke="#b9c8e6" stroke-width="2.4" stroke-linecap="round"/>
+    <path d="M68 78V52a12 12 0 0 1 24 0v26" fill="#f3f6fc" stroke="#9fb3d9" stroke-width="2.4"/>
+    <rect x="26" y="78" width="108" height="9" rx="4.5" fill="#c9d6ee"/>
+    <path d="M52 96l14-14M108 96L94 82" stroke="#e0a63f" stroke-width="3.4" stroke-linecap="round"/>
+  </svg>`,
+  // 請求書と鉛筆：この期間のデータがない状態
+  bill:`<svg class="art" viewBox="0 0 160 116" aria-hidden="true">
+    <ellipse cx="80" cy="104" rx="48" ry="6.5" fill="#e3e9f4"/>
+    <path d="M50 14h38l22 22v58a5 5 0 0 1-5 5H50a5 5 0 0 1-5-5V19a5 5 0 0 1 5-5z" fill="#f7f9fd" stroke="#9fb3d9" stroke-width="2.4" stroke-linejoin="round"/>
+    <path d="M88 14v22h22" fill="none" stroke="#9fb3d9" stroke-width="2.4" stroke-linejoin="round"/>
+    <path d="M58 52h34M58 63h24M58 74h30" stroke="#c3d0e8" stroke-width="3.2" stroke-linecap="round"/>
+    <path d="M96 88l18-18 8 8-18 18-10 2z" fill="#fbe6c2" stroke="#e0a63f" stroke-width="2.4" stroke-linejoin="round"/>
+  </svg>`,
+  // 保管箱：発行履歴がまだない状態
+  log:`<svg class="art" viewBox="0 0 160 116" aria-hidden="true">
+    <ellipse cx="80" cy="104" rx="46" ry="6.5" fill="#e3e9f4"/>
+    <path d="M38 46h84v46a5 5 0 0 1-5 5H43a5 5 0 0 1-5-5z" fill="#f2f6fc" stroke="#9fb3d9" stroke-width="2.4" stroke-linejoin="round"/>
+    <path d="M32 30h96v16H32z" fill="#dfe7f6" stroke="#9fb3d9" stroke-width="2.4" stroke-linejoin="round"/>
+    <path d="M68 62h24" stroke="#9fb3d9" stroke-width="3.2" stroke-linecap="round"/>
+    <path d="M92 14l6 10 11 2-8 8 2 11-11-6-11 6 2-11-8-8 11-2z" fill="#fbe6c2" stroke="#e0a63f" stroke-width="2"/>
+  </svg>`,
+};
+
 /* 統計タイル用のアイコン（線幅は既存アイコンと統一） */
 const STAT_ICONS={
   att:'<svg class="ic" viewBox="0 0 24 24"><path d="M12 12.6a4.1 4.1 0 1 0 0-8.2 4.1 4.1 0 0 0 0 8.2z"/><path d="M4.6 20.4a7.4 7.4 0 0 1 14.8 0"/></svg>',
@@ -571,7 +600,7 @@ function renderDash(){
   if(!dashDirty&&body.dataset.stamp===stamp&&body.childElementCount)return;
   body.dataset.stamp=stamp;
   if(!STATE.employees.length){
-    body.innerHTML=`<div class="card"><div class="empty">まだデータがありません<br>従業員を登録して勤怠をつけると<br>ここに売上ダッシュボードが表示されます</div>
+    body.innerHTML=`<div class="card"><div class="empty">${ART.att}<b>まだデータがありません</b><br>従業員を登録して勤怠をつけると<br>ここに売上ダッシュボードが表示されます</div>
       <button class="btn btn-navy" onclick="switchTab('att')">勤怠をつけはじめる</button></div>`;
     return;
   }
@@ -856,7 +885,7 @@ function renderAtt(){
   const body=$('att-body');
   const emp=STATE.employees.find(e=>e.id===selEmp);
   if(!emp){
-    body.innerHTML='<div class="empty">従業員がいません<br>上の「＋ 追加」から登録してください</div>';
+    body.innerHTML=`<div class="empty">${ART.att}<b>まだ従業員がいません</b><br>上の「＋ 追加」から登録してください</div>`;
     return;
   }
   const days=daysInMonthList(viewY,viewM);
@@ -1114,7 +1143,7 @@ function renderBill(){
 
   const list=$('sum-list');list.innerHTML='';
   if(!reports.length){
-    list.innerHTML='<div class="empty">この締め期間の勤怠データがありません<br>「勤怠」タブで入力してください</div>';
+    list.innerHTML=`<div class="empty">${ART.bill}<b>この期間のデータがありません</b><br>「勤怠」タブで出勤を入力してください</div>`;
     $('batch-pdf-btn').style.display='none';
     return;
   }
@@ -1160,6 +1189,47 @@ function issueFileName(o){
   const d=(o.issuedAt||'').slice(0,10).replace(/-/g,'')||'00000000';
   const cli=(o.clientName||'取引先').replace(/[\\/:*?"<>|\s]/g,'').slice(0,24);
   return `${d}_${Math.round(o.total)}_${cli}`;
+}
+
+/* 角印風の印影を会社名から組む。発行の瞬間に「ポン」と押される演出に使う。
+   （次回の電子印鑑機能でも同じ描画を流用できる形にしてある） */
+function buildSeal(name){
+  const chars=[...(name||'')].filter(c=>!/\s/.test(c)).slice(0,8);
+  if(!chars.length)return '';
+  const cols=chars.length<=4?2:Math.ceil(chars.length/3);
+  const rows=Math.ceil(chars.length/cols);
+  const S=100,pad=13,inner=S-pad*2;
+  const cw=inner/cols,ch=inner/rows;
+  // 縦書きの印相に倣い、右の列から上→下の順に置く
+  const cells=chars.map((c,i)=>{
+    const col=Math.floor(i/rows),row=i%rows;
+    const x=S-pad-cw*(col+.5), y=pad+ch*(row+.5);
+    const size=Math.min(cw,ch)*.92;
+    return `<text x="${x.toFixed(1)}" y="${(y+size*.34).toFixed(1)}" text-anchor="middle"
+      font-size="${size.toFixed(1)}" font-weight="700" fill="#c0392b"
+      font-family="'Hiragino Mincho ProN','Yu Mincho',serif">${esc(c)}</text>`;
+  }).join('');
+  return `<svg class="seal" viewBox="0 0 ${S} ${S}" aria-label="角印 ${esc(name)}">
+    <rect x="3" y="3" width="${S-6}" height="${S-6}" rx="5" fill="rgba(255,255,255,.35)" stroke="#c0392b" stroke-width="5"/>
+    <rect x="9.5" y="9.5" width="${S-19}" height="${S-19}" rx="3" fill="none" stroke="#c0392b" stroke-width="1.4"/>
+    ${cells}
+  </svg>`;
+}
+/* 発行の瞬間に角印を押す */
+function stampSeal(){
+  const host=$('pv-scroll');
+  const name=(pendingIssue&&pendingIssue.issuerName)||STATE.settings.issuer.companyName;
+  if(!host||!name||matchMedia('(prefers-reduced-motion: reduce)').matches)return;
+  const page=host.querySelector('.inv-page');
+  if(!page)return;
+  const old=host.querySelector('.seal-wrap');
+  if(old)old.remove();
+  const wrap=document.createElement('div');
+  wrap.className='seal-wrap';
+  wrap.innerHTML=buildSeal(name);
+  page.style.position='relative';
+  page.appendChild(wrap);
+  haptic();
 }
 
 let pendingIssue=null;   // プレビュー中の請求書（保存・印刷を押した時点で履歴に記録）
@@ -1211,6 +1281,7 @@ $('pv-print').addEventListener('click',()=>{
     saveInvoiceLog();
     pendingLogged=true;
     renderInvoiceLog();
+    stampSeal();
     toast('発行履歴に記録しました');
   }
   // Safari は文書タイトルをPDFの既定ファイル名に使う。検索要件を満たす名前に一時的に差し替える
@@ -1559,7 +1630,7 @@ $('set-add-emp').addEventListener('click',()=>openEmpModal(null));
 function renderInvoiceLog(){
   const list=$('log-list');if(!list)return;
   if(!STATE.invoiceLog.length){
-    list.innerHTML='<div style="font-size:var(--fs-sm);color:var(--mut);padding:2px 0;">まだ発行履歴はありません<br>請求タブで請求書を「保存・印刷」すると記録されます</div>';
+    list.innerHTML=`<div class="empty" style="padding:22px 12px;">${ART.log}<b>まだ発行履歴はありません</b><br>請求タブで「保存・印刷」すると記録されます</div>`;
     return;
   }
   list.innerHTML=STATE.invoiceLog.slice().reverse().map(o=>{

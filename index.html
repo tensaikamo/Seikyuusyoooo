@@ -428,7 +428,10 @@ i.dot-night{background:var(--night);}
 .toast{position:fixed;left:50%;top:calc(var(--st) + 12px);transform:translateX(-50%) translateY(-10px);background:rgba(15,27,51,.94);-webkit-backdrop-filter:blur(10px);backdrop-filter:blur(10px);color:#fff;padding:10px 20px;border-radius:22px;font-size:var(--fs-sm);font-weight:600;opacity:0;pointer-events:none;transition:opacity var(--dur-2),transform var(--dur-2) var(--snap);z-index:10000;white-space:nowrap;max-width:92vw;box-shadow:0 8px 24px rgba(0,0,0,.28),inset 0 1px 0 rgba(255,255,255,.12);}
 .toast.show{opacity:1;transform:translateX(-50%) translateY(0);}
 
-.empty{text-align:center;padding:40px 20px;color:var(--mut);font-size:var(--fs-md);line-height:2;text-wrap:pretty;}
+.empty{text-align:center;padding:34px 20px;color:var(--mut);font-size:var(--fs-md);line-height:1.9;text-wrap:pretty;}
+.empty b{display:block;color:var(--sub);font-size:var(--fs-lg);font-weight:800;margin-bottom:2px;}
+.art{width:150px;height:auto;display:block;margin:0 auto 14px;animation:artIn .6s var(--ease) both;}
+@keyframes artIn{from{opacity:0;transform:translateY(8px) scale(.96);}to{opacity:1;transform:none;}}
 .att-emp,.modal-title,.period-main,.stat-l{text-wrap:balance;}
 
 /* ===== ページ遷移 =====
@@ -453,6 +456,16 @@ i.dot-night{background:var(--night);}
 .pv-title{font-size:var(--fs-md);font-weight:700;}
 .pv-print{background:linear-gradient(150deg in oklab,#ffb32a,#f39408);color:#3a2606;border:none;border-radius:10px;font-size:var(--fs-md);font-weight:800;padding:9px 16px;min-height:40px;cursor:pointer;box-shadow:0 4px 12px rgba(217,126,6,.35);}
 .pv-hint{flex-shrink:0;background:#233150;color:#cdd5e4;font-size:var(--fs-xs);line-height:1.6;padding:9px 14px;}
+.seal-wrap{position:absolute;right:5%;top:21%;width:21%;max-width:96px;pointer-events:none;z-index:3;
+  animation:stampIn .5s var(--snap) both;transform-origin:center;}
+/* 朱肉らしく下の文字に重ねる（乗算）。数字や社名が読めなくならない濃さにする */
+.seal{width:100%;height:auto;display:block;mix-blend-mode:multiply;opacity:.9;}
+@keyframes stampIn{
+  0%{opacity:0;transform:scale(2.4) rotate(-14deg);}
+  55%{opacity:1;transform:scale(.92) rotate(-6deg);}
+  100%{opacity:1;transform:scale(1) rotate(-6deg);}
+}
+@media (prefers-reduced-motion: reduce){.seal-wrap{animation:none;}}
 .pv-scroll{flex:1;overflow:auto;-webkit-overflow-scrolling:touch;padding:16px 12px calc(28px + var(--sb));display:flex;flex-direction:column;align-items:center;gap:16px;}
 @media (prefers-reduced-motion: reduce){.pv-overlay.show{animation:none;}}
 
