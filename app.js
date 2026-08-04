@@ -526,6 +526,26 @@ function buildRing(cur,goal){
   </svg>`;
 }
 
+/* 統計タイル用のアイコン（線幅は既存アイコンと統一） */
+const STAT_ICONS={
+  att:'<svg class="ic" viewBox="0 0 24 24"><path d="M12 12.6a4.1 4.1 0 1 0 0-8.2 4.1 4.1 0 0 0 0 8.2z"/><path d="M4.6 20.4a7.4 7.4 0 0 1 14.8 0"/></svg>',
+  ot:'<svg class="ic" viewBox="0 0 24 24"><circle cx="12" cy="12.8" r="7.9"/><path d="M12 8.6v4.2l2.9 1.8M9 2.6h6"/></svg>',
+  avg:'<svg class="ic" viewBox="0 0 24 24"><path d="M3.6 16.4l4.6-5.2 3.6 3.1 3.4-4.2 5.2 5.6"/><path d="M3.6 20.4h16.8"/></svg>',
+  cum:'<svg class="ic" viewBox="0 0 24 24"><path d="M4.4 7.6h15.2M4.4 12h15.2M4.4 16.4h15.2"/><path d="M8 4.4v15.2"/></svg>',
+};
+/* タイル内のミニ推移グラフ（直近6ヶ月）。軸も目盛りも持たない */
+function sparkline(vals,accent){
+  const W=140,H=20;   // タイル幅に近い比率にして横いっぱいに広げる
+  if(!vals.length||Math.max(...vals)<=0)return `<svg class="spark" viewBox="0 0 ${W} ${H}" aria-hidden="true"></svg>`;
+  const mx=Math.max(...vals),n=vals.length;
+  const pts=vals.map((v,i)=>[+(i/(n-1)*W).toFixed(1),+(H-2-(v/mx)*(H-4)).toFixed(1)]);
+  const line=smoothPath(pts);
+  return `<svg class="spark" viewBox="0 0 ${W} ${H}" aria-hidden="true">
+    <path d="${line} L${W} ${H} L0 ${H} Z" fill="${accent?'rgba(217,126,6,.16)':'rgba(63,95,167,.14)'}"/>
+    <path d="${line}" fill="none" stroke="${accent?'#d97e06':'#4f74c8'}" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+    <circle cx="${pts[n-1][0]-1}" cy="${pts[n-1][1]}" r="2.1" fill="${accent?'#d97e06':'#4f74c8'}"/>
+  </svg>`;
+}
 let dashAnimated=false;   // グラフの描画アニメーションはセッション初回のみ再生する
 function animClass(name){return dashAnimated?'':' '+name;}
 let dashTipTimer=null;
@@ -597,6 +617,24 @@ function renderDash(){
     days.add(r.date);
   });
   const avg=days.size?Math.round(cur/days.size):0;
+  // タイルのミニ推移用に直近6ヶ月を1回の走査で集計する
+  const spark6={att:[],ot:[],avg:[],sales:[]};
+  {
+    const keys=dashMonths.slice(6).map(m=>m.key);
+    const acc={};keys.forEach(k=>acc[k]={att:0,ot:0,sales:0,days:new Set()});
+    STATE.records.forEach(r=>{
+      const k=r.date.slice(0,7);
+      if(!acc[k]||!recHasData(r))return;
+      const e=empById.get(r.employeeId);if(!e)return;
+      acc[k].att+=(r.attendance||0)+(r.nightAttendance||0);
+      acc[k].ot+=(r.overtimeHours||0)+(r.nightOvertimeHours||0);
+      acc[k].sales+=dailyTotal(r,e).total;
+      acc[k].days.add(r.date);
+    });
+    keys.forEach(k=>{const a=acc[k];
+      spark6.att.push(a.att);spark6.ot.push(a.ot);spark6.sales.push(a.sales);
+      spark6.avg.push(a.days.size?Math.round(a.sales/a.days.size):0);});
+  }
   // 従業員別（今月・暦月）
   const perEmp=STATE.employees
     .map(e=>({name:e.name,total:periodReport(e,`${km}-01`,`${km}-${pad2(new Date(Y,M,0).getDate())}`).grandTotal}))
@@ -613,10 +651,14 @@ function renderDash(){
       </div>
     </div>
     <div class="stat-grid">
-      <div class="stat"><div class="stat-l">出勤（人工）</div><div class="stat-v">${att}<small>人工</small></div></div>
-      <div class="stat"><div class="stat-l">残業時間</div><div class="stat-v">${otH}<small>h</small></div></div>
-      <div class="stat"><div class="stat-l">稼働日の平均</div><div class="stat-v">${fmtMan(avg)}<small>円/日</small></div></div>
-      <div class="stat"><div class="stat-l">これまでの累計</div><div class="stat-v">${fmtMan(cum)}<small>円</small></div></div>
+      <div class="stat"><div class="stat-top"><span class="stat-l">出勤（人工）</span>${STAT_ICONS.att}</div>
+        <div class="stat-v">${att}<small>人工</small></div>${sparkline(spark6.att)}</div>
+      <div class="stat"><div class="stat-top"><span class="stat-l">残業時間</span>${STAT_ICONS.ot}</div>
+        <div class="stat-v">${otH}<small>h</small></div>${sparkline(spark6.ot,true)}</div>
+      <div class="stat"><div class="stat-top"><span class="stat-l">稼働日の平均</span>${STAT_ICONS.avg}</div>
+        <div class="stat-v">${fmtMan(avg)}<small>円/日</small></div>${sparkline(spark6.avg)}</div>
+      <div class="stat"><div class="stat-top"><span class="stat-l">これまでの累計</span>${STAT_ICONS.cum}</div>
+        <div class="stat-v">${fmtMan(cum)}<small>円</small></div>${sparkline(spark6.sales)}</div>
     </div>
     <div class="card ring-card">
       <div class="ring-slot" data-chart="ring"></div>
