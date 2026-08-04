@@ -128,14 +128,27 @@ svg.ic{fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;strok
 
 /* ===== SPLASH ===== */
 #splash{position:fixed;inset:0;z-index:9999;background:var(--grad-hero);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;transition:opacity .35s;}
-#splash::after{content:'';position:absolute;inset:0;background:radial-gradient(110% 80% at 85% -10%,rgba(122,150,255,.25),transparent 55%);pointer-events:none;}
-#splash .mk{width:62px;height:78px;border:3px solid #fff;border-radius:8px;position:relative;background:transparent;animation:rise .5s var(--ease) both;}
-#splash .mk::before{content:'';position:absolute;top:10px;left:10px;right:10px;height:3px;background:var(--amber);box-shadow:0 10px 0 rgba(255,255,255,.85),0 20px 0 rgba(255,255,255,.85);transform-origin:left;animation:mkline .55s .3s var(--ease) both;}
-#splash .nm{color:#fff;font-size:1.3rem;font-weight:800;letter-spacing:.12em;animation:rise .5s .4s var(--ease) both;}
-#splash .sb{font-size:var(--fs-xs);letter-spacing:.24em;color:rgba(255,255,255,.5);animation:rise .5s .52s var(--ease) both;}
-#splash.hide{opacity:0;pointer-events:none;}
+#splash::after{content:'';position:absolute;inset:0;z-index:1;background:radial-gradient(110% 80% at 85% -10%,rgba(122,150,255,.25),transparent 55%);pointer-events:none;}
+#splash .sp-body{position:relative;z-index:2;display:flex;flex-direction:column;align-items:center;gap:14px;}
+#splash .mk{width:96px;height:96px;overflow:visible;}
+/* 紙 → 折り返し → 罫線 → 上昇線 の順に描かれ、最後に紙が満ちる */
+#splash .mk path,#splash .mk circle{fill:none;stroke-linecap:round;stroke-linejoin:round;}
+#splash .mk-paper{stroke:url(#lg-paper);stroke-width:3;
+  stroke-dasharray:230;stroke-dashoffset:230;animation:draw .62s var(--ease) .05s forwards,paperFill .5s ease .55s forwards;}
+#splash .mk-fold{stroke:url(#lg-paper);stroke-width:3;
+  stroke-dasharray:23;stroke-dashoffset:23;animation:draw .26s var(--ease) .42s forwards;}
+#splash .mk-line{stroke:rgba(255,255,255,.5);stroke-width:2.6;
+  stroke-dasharray:24;stroke-dashoffset:24;animation:draw .3s var(--ease) .6s forwards;}
+#splash .mk-rise{stroke:url(#lg-rise);stroke-width:4;
+  stroke-dasharray:52;stroke-dashoffset:52;animation:draw .45s var(--ease) .72s forwards;}
+#splash .mk .mk-dot{fill:var(--amber);stroke:none;transform-origin:46px 30px;
+  opacity:0;animation:pop .4s var(--snap) 1.12s forwards;}
+@keyframes draw{to{stroke-dashoffset:0;}}
+@keyframes paperFill{to{fill:rgba(255,255,255,.07);}}
+@keyframes pop{from{opacity:0;transform:scale(0);}to{opacity:1;transform:scale(1);}}
+#splash .nm{color:#fff;font-size:1.35rem;font-weight:800;letter-spacing:.12em;animation:rise .5s .95s var(--ease) both;}
+#splash .sb{font-size:var(--fs-xs);letter-spacing:.26em;color:rgba(255,255,255,.55);animation:rise .5s 1.06s var(--ease) both;}
 @keyframes rise{from{opacity:0;transform:translateY(10px);}to{opacity:1;transform:none;}}
-@keyframes mkline{from{transform:scaleX(0);}to{transform:scaleX(1);}}
 
 /* ===== HEADER ===== */
 .ph{
@@ -434,9 +447,27 @@ i.dot-night{background:var(--night);}
 <span style="position:fixed;width:1px;height:1px;opacity:0;pointer-events:none;left:-9999px;"><input type="checkbox" switch id="hapticChk"><label for="hapticChk" id="hapticLbl"></label></span>
 
 <div id="splash">
-  <div class="mk"></div>
-  <div class="nm">日給管理・請求書</div>
-  <div class="sb">SALARY &amp; INVOICE</div>
+  <i class="mesh"></i><i class="grain"></i>
+  <div class="sp-body">
+    <!-- ロゴ：請求書の紙（角が折れた書類）＋売上の上昇線 -->
+    <svg class="mk" viewBox="0 0 64 64" aria-label="日給管理・請求書">
+      <defs>
+        <linearGradient id="lg-paper" x1="0" y1="0" x2="1" y2="1">
+          <stop offset="0" stop-color="#ffffff"/><stop offset="1" stop-color="#c9d6f5"/>
+        </linearGradient>
+        <linearGradient id="lg-rise" x1="0" y1="1" x2="1" y2="0">
+          <stop offset="0" stop-color="var(--amber-d)"/><stop offset="1" stop-color="var(--amber)"/>
+        </linearGradient>
+      </defs>
+      <path class="mk-paper" d="M15 5h25l11 11v39a5 5 0 0 1-5 5H15a5 5 0 0 1-5-5V10a5 5 0 0 1 5-5z"/>
+      <path class="mk-fold" d="M40 5v11h11"/>
+      <path class="mk-line" d="M19 27h14M19 35h9"/>
+      <path class="mk-rise" d="M18 50l9-10 7 6 12-16"/>
+      <circle class="mk-dot" cx="46" cy="30" r="3.4"/>
+    </svg>
+    <div class="nm">日給管理・請求書</div>
+    <div class="sb">SALARY &amp; INVOICE</div>
+  </div>
 </div>
 
 <!-- HEADER -->

@@ -259,7 +259,7 @@ async function boot(){
   buildClosingOptions();
   loadSettingsForm();
   if(STATE.employees.length) selEmp=STATE.employees[0].id;
-  setTimeout(()=>$('splash').classList.add('hide'),700);
+  setTimeout(()=>$('splash').classList.add('hide'),1500);  // ロゴの描画アニメーションを見せてから閉じる
   renderAll();
   switchTab('home');
 }
