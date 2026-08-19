@@ -45,7 +45,7 @@ jobs:
         run: |
           git config user.name "invoice-hardening-bot"
           git config user.email "invoice-hardening-bot@users.noreply.github.com"
-          git add app.js tests/core-invariants.test.js sw.js README.md 2>/dev/null || true
+          git add app.js tests/core-invariants.test.js sw.js index.html manifest.json README.md 2>/dev/null || true
           if git diff --cached --quiet; then
             echo "No runtime/test changes to commit"
             exit 0
