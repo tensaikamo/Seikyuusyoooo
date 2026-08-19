@@ -13,6 +13,13 @@ const DB='salary-db',STORE='kv';let _dbp=null;
 function db(){if(_dbp)return _dbp;_dbp=new Promise((res,rej)=>{const r=indexedDB.open(DB,1);r.onupgradeneeded=()=>{if(!r.result.objectStoreNames.contains(STORE))r.result.createObjectStore(STORE);};r.onsuccess=()=>res(r.result);r.onerror=()=>rej(r.error);});return _dbp;}
 function idbGet(k){return db().then(d=>new Promise((res,rej)=>{const r=d.transaction(STORE,'readonly').objectStore(STORE).get(k);r.onsuccess=()=>res(r.result);r.onerror=()=>rej(r.error);}));}
 function idbSet(k,v){return db().then(d=>new Promise((res,rej)=>{const t=d.transaction(STORE,'readwrite');t.objectStore(STORE).put(v,k);t.oncomplete=()=>res();t.onerror=()=>rej(t.error);}));}
+/* 復元時は複数キーを1つのtransactionで更新する。途中失敗で employees だけ新しく、
+   records は古い、といった半端な復元状態を作らない。 */
+function idbSetMany(entries){return db().then(d=>new Promise((res,rej)=>{
+  const t=d.transaction(STORE,'readwrite'),s=t.objectStore(STORE);
+  entries.forEach(([k,v])=>s.put(v,k));
+  t.oncomplete=()=>res();t.onerror=()=>rej(t.error);t.onabort=()=>rej(t.error||new Error('transaction aborted'));
+}));}
 function idbClear(){return db().then(d=>new Promise((res,rej)=>{const t=d.transaction(STORE,'readwrite');t.objectStore(STORE).clear();t.oncomplete=()=>res();t.onerror=()=>rej(t.error);}));}
 
 /* ---------- id ---------- */
@@ -279,6 +286,141 @@ function periodReport(emp,start,end){
     totalNightWage:nwage, totalNightOvertimePay:not,
     totalTransportFee:tr,
     grandTotal:wage+ot+nwage+not+tr, records:recs};
+}
+
+/* ---------- backup validation（STATEへ触る前に全件検査） ---------- */
+const BACKUP_SCHEMA_VERSION=1;
+function backupFail(msg){throw new Error(msg);}
+function backupObj(v,label){if(!v||typeof v!=='object'||Array.isArray(v))backupFail(`${label}の形式が不正です`);return v;}
+function backupText(v,label,max=500){
+  if(v==null)return '';
+  if(typeof v!=='string')backupFail(`${label}は文字列ではありません`);
+  if(v.length>max)backupFail(`${label}が長すぎます`);
+  return v;
+}
+function backupNoMarkup(v,label,max=120){
+  const s=backupText(v,label,max);
+  if(/[<>]/.test(s))backupFail(`${label}に使用できない文字があります`);
+  return s;
+}
+function backupId(v,label){
+  if(typeof v!=='string'||!/^[A-Za-z0-9_-]{1,128}$/.test(v))backupFail(`${label}のIDが不正です`);
+  return v;
+}
+function backupNum(v,label,min,max,integer=false){
+  const n=Number(v);
+  if(!Number.isFinite(n)||n<min||n>max||(integer&&!Number.isInteger(n)))backupFail(`${label}の数値が範囲外です`);
+  return n;
+}
+function backupDate(v,label){
+  if(typeof v!=='string'||!/^\d{4}-\d{2}-\d{2}$/.test(v))backupFail(`${label}の日付形式が不正です`);
+  const [y,m,d]=v.split('-').map(Number),dt=new Date(y,m-1,d);
+  if(dt.getFullYear()!==y||dt.getMonth()+1!==m||dt.getDate()!==d)backupFail(`${label}に存在しない日付があります`);
+  return v;
+}
+function normalizeBackupSettings(raw){
+  const s=raw==null?{}:backupObj(raw,'設定');
+  const issuer=s.issuer==null?{}:backupObj(s.issuer,'発行者設定');
+  const client=s.client==null?{}:backupObj(s.client,'請求先設定');
+  const bank=s.bank==null?{}:backupObj(s.bank,'振込先設定');
+  const tax=backupNum(s.taxRate??DEFAULT_SETTINGS.taxRate,'消費税率',0,100);
+  if(![0,8,10].includes(tax))backupFail('消費税率は 0・8・10% のいずれかにしてください');
+  return {
+    defaultTransportFee:backupNum(s.defaultTransportFee??DEFAULT_SETTINGS.defaultTransportFee,'車代の初期値',0,INPUT_MAX.transportFee),
+    taxRate:tax,
+    closingDay:backupNum(s.closingDay??DEFAULT_SETTINGS.closingDay,'締め日',1,31,true),
+    monthlyGoal:backupNum(s.monthlyGoal??DEFAULT_SETTINGS.monthlyGoal,'月間目標',0,1000000000000),
+    issuer:{
+      companyName:backupText(issuer.companyName,'自社名',200),postalCode:backupText(issuer.postalCode,'自社郵便番号',40),
+      address:backupText(issuer.address,'自社住所',500),phone:backupText(issuer.phone,'電話番号',100),
+      invoiceNumber:backupNoMarkup(issuer.invoiceNumber,'登録番号',100)
+    },
+    client:{
+      companyName:backupText(client.companyName,'請求先名',200),postalCode:backupText(client.postalCode,'請求先郵便番号',40),
+      address:backupText(client.address,'請求先住所',500),contactName:backupText(client.contactName,'担当者名',200)
+    },
+    bank:{
+      bankName:backupText(bank.bankName,'銀行名',200),branchName:backupText(bank.branchName,'支店名',200),
+      accountType:backupText(bank.accountType??DEFAULT_SETTINGS.bank.accountType,'口座種別',40),
+      accountNumber:backupText(bank.accountNumber,'口座番号',100),accountHolder:backupText(bank.accountHolder,'口座名義',200)
+    }
+  };
+}
+function normalizeBackupIssue(raw,index){
+  const o=backupObj(raw,`発行履歴${index+1}件目`);
+  const period=backupObj(o.period,`発行履歴${index+1}件目の期間`);
+  const issuedAt=backupText(o.issuedAt,`発行履歴${index+1}件目の発行日時`,80);
+  if(!Number.isFinite(Date.parse(issuedAt)))backupFail(`発行履歴${index+1}件目の発行日時が不正です`);
+  const start=backupDate(period.start,`発行履歴${index+1}件目の開始日`);
+  const end=backupDate(period.end,`発行履歴${index+1}件目の終了日`);
+  if(start>end)backupFail(`発行履歴${index+1}件目の期間が逆転しています`);
+  let snapshot=null;
+  if(o.snapshot!=null){
+    snapshot=backupObj(o.snapshot,`発行履歴${index+1}件目のスナップショット`);
+    if(!snapshot.settings||!Array.isArray(snapshot.reports))backupFail(`発行履歴${index+1}件目のスナップショット形式が不正です`);
+    const serialized=JSON.stringify(snapshot);
+    if(serialized.length>5000000)backupFail(`発行履歴${index+1}件目のスナップショットが大きすぎます`);
+    snapshot=JSON.parse(serialized);
+  }
+  return {
+    id:backupId(o.id,`発行履歴${index+1}件目`),issuedAt,
+    invoiceNo:backupNoMarkup(o.invoiceNo,`発行履歴${index+1}件目の請求番号`,120),
+    issueDate:backupNoMarkup(o.issueDate,`発行履歴${index+1}件目の発行日`,80),
+    period:{start,end,label:backupNoMarkup(period.label,`発行履歴${index+1}件目の期間表示`,120),periodLabel:backupNoMarkup(period.periodLabel,`発行履歴${index+1}件目の請求月表示`,80)},
+    clientName:backupText(o.clientName,`発行履歴${index+1}件目の取引先`,300),
+    issuerName:backupText(o.issuerName,`発行履歴${index+1}件目の発行者`,300),
+    subtotal:backupNum(o.subtotal,`発行履歴${index+1}件目の小計`,-1000000000000,1000000000000),
+    tax:backupNum(o.tax,`発行履歴${index+1}件目の税額`,-1000000000000,1000000000000),
+    taxRate:backupNum(o.taxRate,`発行履歴${index+1}件目の税率`,0,100),
+    total:backupNum(o.total,`発行履歴${index+1}件目の合計`,-1000000000000,1000000000000),
+    batch:!!o.batch,voided:!!o.voided,voidReason:backupText(o.voidReason,`発行履歴${index+1}件目の取消理由`,1000),
+    ...(o.voidedAt?{voidedAt:backupText(o.voidedAt,`発行履歴${index+1}件目の取消日時`,80)}:{}),
+    ...(o.voidOf?{voidOf:backupId(o.voidOf,`発行履歴${index+1}件目の取消元`)}:{}),
+    snapshot
+  };
+}
+function validateBackupPayload(raw){
+  const o=backupObj(raw,'バックアップ');
+  if(o.schemaVersion!=null&&Number(o.schemaVersion)!==BACKUP_SCHEMA_VERSION)backupFail('このバックアップ形式は現在のアプリでは復元できません');
+  if(!Array.isArray(o.employees)||!Array.isArray(o.records))backupFail('従業員または勤怠データが見つかりません');
+  const invoiceRaw=o.invoiceLog==null?[]:o.invoiceLog;
+  if(!Array.isArray(invoiceRaw))backupFail('発行履歴の形式が不正です');
+  if(o.employees.length>5000||o.records.length>500000||invoiceRaw.length>100000)backupFail('バックアップの件数が上限を超えています');
+
+  const empIds=new Set();
+  const employees=o.employees.map((rawEmp,i)=>{
+    const e=backupObj(rawEmp,`従業員${i+1}件目`),id=backupId(e.id,`従業員${i+1}件目`);
+    if(empIds.has(id))backupFail(`従業員IDが重複しています: ${id}`);empIds.add(id);
+    const name=backupText(e.name,`従業員${i+1}件目の名前`,200);
+    if(!name.trim())backupFail(`従業員${i+1}件目の名前が空です`);
+    return {id,name,dailyWage:backupNum(e.dailyWage,`${name}の日給`,1,WAGE_MAX),nightWage:backupNum(e.nightWage??0,`${name}の夜間単価`,0,WAGE_MAX),createdAt:backupText(e.createdAt,`${name}の作成日時`,100)};
+  });
+
+  const recordIds=new Set(),dayKeys=new Set();
+  const records=o.records.map((rawRec,i)=>{
+    const r=backupObj(rawRec,`勤怠${i+1}件目`),id=backupId(r.id,`勤怠${i+1}件目`),employeeId=backupId(r.employeeId,`勤怠${i+1}件目の従業員`);
+    if(recordIds.has(id))backupFail(`勤怠IDが重複しています: ${id}`);recordIds.add(id);
+    if(!empIds.has(employeeId))backupFail(`勤怠${i+1}件目が存在しない従業員を参照しています`);
+    const date=backupDate(r.date,`勤怠${i+1}件目`),dayKey=`${employeeId}|${date}`;
+    if(dayKeys.has(dayKey))backupFail(`同じ従業員・同じ日の勤怠が重複しています: ${date}`);dayKeys.add(dayKey);
+    const rec={id,employeeId,date,
+      attendance:backupNum(r.attendance??0,`勤怠${i+1}件目の出勤数`,0,INPUT_MAX.attendance),
+      overtimeHours:backupNum(r.overtimeHours??0,`勤怠${i+1}件目の残業時間`,0,INPUT_MAX.overtimeHours),
+      nightAttendance:backupNum(r.nightAttendance??0,`勤怠${i+1}件目の夜勤出勤数`,0,INPUT_MAX.nightAttendance),
+      nightOvertimeHours:backupNum(r.nightOvertimeHours??0,`勤怠${i+1}件目の夜間残業`,0,INPUT_MAX.nightOvertimeHours),
+      transportFee:backupNum(r.transportFee??0,`勤怠${i+1}件目の車代`,0,INPUT_MAX.transportFee)};
+    if(r.manualTotal!=null)rec.manualTotal=backupNum(r.manualTotal,`勤怠${i+1}件目の手入力合計`,0,INPUT_MAX.manualTotal);
+    if(r.note!=null)rec.note=backupText(r.note,`勤怠${i+1}件目のメモ`,2000);
+    return rec;
+  });
+
+  const logIds=new Set();
+  const invoiceLog=invoiceRaw.map((x,i)=>{
+    const issue=normalizeBackupIssue(x,i);
+    if(logIds.has(issue.id))backupFail(`発行履歴IDが重複しています: ${issue.id}`);logIds.add(issue.id);
+    return issue;
+  });
+  return {schemaVersion:BACKUP_SCHEMA_VERSION,employees,records,settings:normalizeBackupSettings(o.settings),invoiceLog};
 }
 
 /* ---------- BOOT ---------- */
@@ -1920,7 +2062,7 @@ $('rule-btn').addEventListener('click',()=>{
 });
 
 /* データ管理 */
-function buildBackup(){return JSON.stringify({app:'日給管理・請求書',version:APP_VERSION,exportedAt:new Date().toISOString(),employees:STATE.employees,records:STATE.records,settings:STATE.settings,invoiceLog:STATE.invoiceLog},null,2);}
+function buildBackup(){return JSON.stringify({app:'日給管理・請求書',schemaVersion:BACKUP_SCHEMA_VERSION,version:APP_VERSION,exportedAt:new Date().toISOString(),employees:STATE.employees,records:STATE.records,settings:STATE.settings,invoiceLog:STATE.invoiceLog},null,2);}
 $('export-btn').addEventListener('click',()=>{
   const blob=new Blob([buildBackup()],{type:'application/json'});
   const url=URL.createObjectURL(blob);const a=document.createElement('a');
@@ -1933,15 +2075,19 @@ $('import-btn').addEventListener('click',()=>{
   inp.addEventListener('change',async()=>{
     const f=inp.files&&inp.files[0];if(!f)return;
     try{
-      const o=JSON.parse(await f.text());
-      if(Array.isArray(o.employees))STATE.employees=o.employees;
-      if(Array.isArray(o.records))STATE.records=o.records;
-      if(o.settings)STATE.settings=mergeSettings(o.settings);
-      if(Array.isArray(o.invoiceLog))STATE.invoiceLog=o.invoiceLog;
-      STATE.ready=true;
-      await Promise.all([saveEmployees(),saveRecords(),saveSettings(),saveInvoiceLog(),saveReady()]);
+      const raw=JSON.parse(await f.text());
+      // ここで全件検査。失敗した時点では STATE / IndexedDB のどちらにも触れていない。
+      const o=validateBackupPayload(raw);
+      const settings=mergeSettings(o.settings);
+      await idbSetMany([
+        ['employees',o.employees],['records',o.records],['settings',settings],
+        ['invoiceLog',o.invoiceLog],['ready',true]
+      ]);
+      // 永続化が成功してからメモリ上の状態も切り替える。
+      STATE.employees=o.employees;STATE.records=o.records;STATE.settings=settings;
+      STATE.invoiceLog=o.invoiceLog;STATE.ready=true;invalidateIdx();
       toast('復元しました ✓');setTimeout(()=>location.reload(),700);
-    }catch(e){toast('⚠️ ファイルを読めませんでした');}
+    }catch(e){toast('⚠️ 復元できません: '+(e&&e.message?e.message:'ファイルを読めませんでした'));}
   });
   inp.click();
 });

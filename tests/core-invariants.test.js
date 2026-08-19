@@ -23,7 +23,7 @@ function loadCore() {
   const expose = `\n;globalThis.__core = {
     overtimeRate, safeNum, dailyTotal, recHasData,
     billingPeriod, calcTax, nextInvoiceNumber, daysInPeriod,
-    periodReport, idx, invalidateIdx, STATE,
+    periodReport, idx, invalidateIdx, validateBackupPayload, STATE,
     INPUT_MAX, WAGE_MAX
   };`;
 
@@ -219,4 +219,60 @@ test('発行履歴の永続化完了後にだけ印刷へ進む', () => {
   assert.ok(print > save, '保存完了より先に印刷へ進んでいる');
   assert.ok(rollback > save, '保存失敗時のメモリ上の履歴巻き戻しがない');
   assert.match(handler, /印刷は開始していません/);
+});
+
+
+function sampleBackup() {
+  return {
+    app: '日給管理・請求書',
+    version: '1.6.4',
+    employees: [{ id: 'emp1', name: 'A', dailyWage: '10000', nightWage: 0, createdAt: '2026-08-01T00:00:00.000Z' }],
+    records: [{ id: 'rec1', employeeId: 'emp1', date: '2026-08-01', attendance: '1', overtimeHours: 0, nightAttendance: 0, nightOvertimeHours: 0, transportFee: '1000' }],
+    settings: { defaultTransportFee: 1000, taxRate: 10, closingDay: 31, monthlyGoal: 0, issuer: {}, client: {}, bank: {} },
+    invoiceLog: [],
+  };
+}
+
+test('validateBackupPayload: 正常な旧形式バックアップを壊さず数値を正規化する', () => {
+  const out = core.validateBackupPayload(sampleBackup());
+  assert.equal(out.schemaVersion, 1);
+  assert.equal(out.employees[0].dailyWage, 10000);
+  assert.equal(out.records[0].attendance, 1);
+  assert.equal(out.records[0].transportFee, 1000);
+});
+
+test('validateBackupPayload: 同一従業員・同一日の重複勤怠を拒否する', () => {
+  const b = sampleBackup();
+  b.records.push({ ...b.records[0], id: 'rec2' });
+  assert.throws(() => core.validateBackupPayload(b), /重複/);
+});
+
+test('validateBackupPayload: 存在しない従業員参照と危険なIDを拒否する', () => {
+  const orphan = sampleBackup();
+  orphan.records[0].employeeId = 'missing';
+  assert.throws(() => core.validateBackupPayload(orphan), /存在しない従業員/);
+  const unsafe = sampleBackup();
+  unsafe.employees[0].id = "x');alert(1)//";
+  unsafe.records[0].employeeId = unsafe.employees[0].id;
+  assert.throws(() => core.validateBackupPayload(unsafe), /IDが不正/);
+});
+
+test('validateBackupPayload: 入力上限超過と未知の将来schemaを拒否する', () => {
+  const high = sampleBackup();
+  high.records[0].transportFee = 100001;
+  assert.throws(() => core.validateBackupPayload(high), /範囲外/);
+  const future = sampleBackup();
+  future.schemaVersion = 999;
+  assert.throws(() => core.validateBackupPayload(future), /復元できません/);
+});
+
+test('復元処理は検証完了後に1トランザクションで永続化する', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'app.js'), 'utf8');
+  const start = src.indexOf("$('import-btn').addEventListener('click',()=>{");
+  assert.notEqual(start, -1);
+  const body = src.slice(start, src.indexOf("$('reset-btn')", start));
+  const validate = body.indexOf('validateBackupPayload(raw)');
+  const persist = body.indexOf('await idbSetMany([');
+  const mutate = body.indexOf('STATE.employees=o.employees');
+  assert.ok(validate >= 0 && persist > validate && mutate > persist, '検証→永続化→STATE反映の順になっていない');
 });
