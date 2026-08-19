@@ -401,6 +401,19 @@ function normalizeBackupSnapshot(raw,index){
       if(r.note!=null)rec.note=backupText(r.note,`${recLabel}のメモ`,2000);
       return rec;
     });
+    let expectedAttendance=0,expectedNightAttendance=0;
+    let expectedDailyWage=0,expectedOvertimePay=0,expectedNightWage=0,expectedNightOvertimePay=0,expectedTransportFee=0;
+    records.forEach(r=>{
+      const t=dailyTotal(r,emp);
+      expectedAttendance+=r.attendance||0;
+      expectedNightAttendance+=r.nightAttendance||0;
+      if(t.overridden){
+        expectedDailyWage+=t.total;
+      }else{
+        expectedDailyWage+=t.wage;expectedOvertimePay+=t.ot;expectedNightWage+=t.nwage;
+        expectedNightOvertimePay+=t.not;expectedTransportFee+=t.tr;
+      }
+    });
     const money=(v,n)=>backupNum(v??0,`${label}の${n}`,0,1000000000000);
     const rep={
       employeeId:reportEmployeeId,
@@ -414,6 +427,16 @@ function normalizeBackupSnapshot(raw,index){
       grandTotal:money(rr.grandTotal,'合計'),
       records
     };
+    const expectedRep={
+      totalAttendance:expectedAttendance,totalNightAttendance:expectedNightAttendance,
+      totalDailyWage:expectedDailyWage,totalOvertimePay:expectedOvertimePay,
+      totalNightWage:expectedNightWage,totalNightOvertimePay:expectedNightOvertimePay,
+      totalTransportFee:expectedTransportFee,
+      grandTotal:expectedDailyWage+expectedOvertimePay+expectedNightWage+expectedNightOvertimePay+expectedTransportFee
+    };
+    Object.entries(expectedRep).forEach(([key,value])=>{
+      if(rep[key]!==value)backupFail(`${label}の集計値が勤怠明細と一致しません (${key})`);
+    });
     return {emp,rep};
   });
   return {settings,reports};
@@ -429,6 +452,17 @@ function normalizeBackupIssue(raw,index){
   if(start>end)backupFail(`発行履歴${index+1}件目の期間が逆転しています`);
   let snapshot=null;
   if(o.snapshot!=null)snapshot=normalizeBackupSnapshot(o.snapshot,index);
+  const subtotal=backupNum(o.subtotal,`発行履歴${index+1}件目の小計`,-1000000000000,1000000000000);
+  const tax=backupNum(o.tax,`発行履歴${index+1}件目の税額`,-1000000000000,1000000000000);
+  const taxRate=backupNum(o.taxRate,`発行履歴${index+1}件目の税率`,0,100);
+  const total=backupNum(o.total,`発行履歴${index+1}件目の合計`,-1000000000000,1000000000000);
+  if(snapshot){
+    const snapSubtotal=snapshot.reports.reduce((sum,x)=>sum+x.rep.grandTotal,0);
+    if(subtotal!==snapSubtotal)backupFail(`発行履歴${index+1}件目の小計がスナップショットと一致しません`);
+    if(taxRate!==snapshot.settings.taxRate)backupFail(`発行履歴${index+1}件目の税率がスナップショットと一致しません`);
+    if(tax!==calcTax(subtotal,taxRate))backupFail(`発行履歴${index+1}件目の税額がスナップショットと一致しません`);
+    if(total!==subtotal+tax)backupFail(`発行履歴${index+1}件目の合計が小計・税額と一致しません`);
+  }
   return {
     id:backupId(o.id,`発行履歴${index+1}件目`),issuedAt,
     invoiceNo:backupNoMarkup(o.invoiceNo,`発行履歴${index+1}件目の請求番号`,120),
@@ -436,10 +470,7 @@ function normalizeBackupIssue(raw,index){
     period:{start,end,label:backupNoMarkup(period.label,`発行履歴${index+1}件目の期間表示`,120),periodLabel:backupNoMarkup(period.periodLabel,`発行履歴${index+1}件目の請求月表示`,80)},
     clientName:backupText(o.clientName,`発行履歴${index+1}件目の取引先`,300),
     issuerName:backupText(o.issuerName,`発行履歴${index+1}件目の発行者`,300),
-    subtotal:backupNum(o.subtotal,`発行履歴${index+1}件目の小計`,-1000000000000,1000000000000),
-    tax:backupNum(o.tax,`発行履歴${index+1}件目の税額`,-1000000000000,1000000000000),
-    taxRate:backupNum(o.taxRate,`発行履歴${index+1}件目の税率`,0,100),
-    total:backupNum(o.total,`発行履歴${index+1}件目の合計`,-1000000000000,1000000000000),
+    subtotal,tax,taxRate,total,
     batch:!!o.batch,voided:!!o.voided,voidReason:backupText(o.voidReason,`発行履歴${index+1}件目の取消理由`,1000),
     ...(o.voidOperator?{voidOperator:backupText(o.voidOperator,`発行履歴${index+1}件目の取消担当者`,200)}:{}),
     ...(o.voidedAt?{voidedAt:backupText(o.voidedAt,`発行履歴${index+1}件目の取消日時`,80)}:{}),
@@ -487,6 +518,18 @@ function validateBackupPayload(raw){
     const issue=normalizeBackupIssue(x,i);
     if(logIds.has(issue.id))backupFail(`発行履歴IDが重複しています: ${issue.id}`);logIds.add(issue.id);
     return issue;
+  });
+  const logById=new Map(invoiceLog.map(x=>[x.id,x])),cancelledOriginals=new Set();
+  invoiceLog.forEach((issue,i)=>{
+    if(!issue.voidOf)return;
+    const original=logById.get(issue.voidOf);
+    if(!original)backupFail(`発行履歴${i+1}件目の取消元が見つかりません`);
+    if(original.id===issue.id||original.voidOf)backupFail(`発行履歴${i+1}件目の取消参照が不正です`);
+    if(cancelledOriginals.has(original.id))backupFail(`同じ発行履歴に複数の取消記録があります: ${original.id}`);
+    cancelledOriginals.add(original.id);
+    if(issue.subtotal!==-original.subtotal||issue.tax!==-original.tax||issue.total!==-original.total||issue.taxRate!==original.taxRate){
+      backupFail(`発行履歴${i+1}件目の取消金額が元の発行記録と一致しません`);
+    }
   });
   return {schemaVersion:BACKUP_SCHEMA_VERSION,employees,records,settings:normalizeBackupSettings(o.settings),invoiceLog};
 }
@@ -1610,6 +1653,13 @@ $('pv-print').addEventListener('click',async()=>{
     renderInvoiceLog();
     stampSeal();
     toast('発行履歴に記録しました');
+  }
+  // WebKitの一時的なユーザー操作状態が、保存待ちの間に失効した場合の保険。
+  // 履歴は既に保存済みなので、印刷だけ次の明示タップに分離する。
+  if(pendingIssue&&navigator.userActivation&&!navigator.userActivation.isActive){
+    if(btn)btn.disabled=false;
+    toast('発行履歴は保存済みです。もう一度「保存・印刷」を押してください');
+    return;
   }
   // Safari は文書タイトルをPDFの既定ファイル名に使う。検索要件を満たす名前に一時的に差し替える
   const prevTitle=document.title;

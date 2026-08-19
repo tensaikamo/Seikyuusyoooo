@@ -215,10 +215,13 @@ test('発行履歴の永続化完了後にだけ印刷へ進む', () => {
   const save = handler.indexOf('await saveInvoiceLog();');
   const print = handler.indexOf('window.print();');
   const rollback = handler.indexOf('STATE.invoiceLog.splice(i,1);');
+  const activationGuard = handler.indexOf('navigator.userActivation');
   assert.ok(save >= 0, 'invoiceLog 保存を await していない');
   assert.ok(print > save, '保存完了より先に印刷へ進んでいる');
   assert.ok(rollback > save, '保存失敗時のメモリ上の履歴巻き戻しがない');
+  assert.ok(activationGuard > save && activationGuard < print, '保存待ちでユーザー操作状態が失効した場合の印刷フォールバックがない');
   assert.match(handler, /印刷は開始していません/);
+  assert.match(handler, /発行履歴は保存済みです/);
 });
 
 
@@ -308,6 +311,41 @@ test('validateBackupPayload: 発行スナップショット内部も数値型ま
   snapReport.reports[0].rep.totalAttendance = '<svg onload=alert(1)>';
   badReport.invoiceLog = [sampleIssue(snapReport)];
   assert.throws(() => core.validateBackupPayload(badReport), /数値が範囲外/);
+});
+
+test('validateBackupPayload: snapshot集計値と発行金額の改ざんを拒否する', () => {
+  const badAggregate = sampleBackup();
+  const snapAggregate = sampleInvoiceSnapshot();
+  snapAggregate.reports[0].rep.grandTotal = 999999;
+  badAggregate.invoiceLog = [sampleIssue(snapAggregate)];
+  assert.throws(() => core.validateBackupPayload(badAggregate), /集計値が勤怠明細と一致/);
+
+  const badIssue = sampleBackup();
+  const issue = sampleIssue(sampleInvoiceSnapshot());
+  issue.subtotal = 999999;
+  badIssue.invoiceLog = [issue];
+  assert.throws(() => core.validateBackupPayload(badIssue), /小計がスナップショットと一致/);
+});
+
+test('validateBackupPayload: 取消元・取消金額・重複取消の整合性を検証する', () => {
+  const base = sampleIssue(sampleInvoiceSnapshot());
+  const cancellation = {
+    id: 'cancel1', issuedAt: '2026-08-03T00:00:00.000Z', invoiceNo: '2026-000001-取消', issueDate: base.issueDate,
+    period: { ...base.period }, clientName: base.clientName, issuerName: base.issuerName,
+    subtotal: -base.subtotal, tax: -base.tax, taxRate: base.taxRate, total: -base.total,
+    batch: false, voided: true, voidReason: '訂正', voidOperator: '担当者', voidedAt: '2026-08-03T00:00:00.000Z', voidOf: base.id, snapshot: null
+  };
+  const good = sampleBackup(); good.invoiceLog = [base, cancellation];
+  assert.equal(core.validateBackupPayload(good).invoiceLog.length, 2);
+
+  const missing = sampleBackup(); missing.invoiceLog = [{ ...cancellation, voidOf: 'missing_issue' }];
+  assert.throws(() => core.validateBackupPayload(missing), /取消元が見つかりません/);
+
+  const wrongAmount = sampleBackup(); wrongAmount.invoiceLog = [base, { ...cancellation, total: -1 }];
+  assert.throws(() => core.validateBackupPayload(wrongAmount), /取消金額が元の発行記録と一致/);
+
+  const duplicate = sampleBackup(); duplicate.invoiceLog = [base, cancellation, { ...cancellation, id: 'cancel2' }];
+  assert.throws(() => core.validateBackupPayload(duplicate), /複数の取消記録/);
 });
 
 test('validateBackupPayload: 発行スナップショットのID不整合と重複日を拒否する', () => {
