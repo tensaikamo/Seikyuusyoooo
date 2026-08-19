@@ -21,7 +21,7 @@ function loadCore() {
 
   const prefix = source.slice(0, cut);
   const expose = `\n;globalThis.__core = {
-    overtimeRate, safeNum, dailyTotal, recHasData,
+    overtimeRate, safeNum, dailyTotal, recHasData, shouldApplyDefaultTransport,
     billingPeriod, calcTax, nextInvoiceNumber, daysInPeriod,
     periodReport, idx, invalidateIdx, validateBackupPayload, STATE,
     INPUT_MAX, WAGE_MAX
@@ -321,4 +321,17 @@ test('角印は印刷HTMLにも埋め込まれる', () => {
   assert.match(src, /\$\{printSeal\}/);
   assert.match(src, /#print-root \.inv-doc-seal\{/);
   assert.match(src, /#print-root \.inv-doc-seal \.seal\{/);
+});
+
+
+test('shouldApplyDefaultTransport: レコード作成済みでも休み→初出勤なら適用する', () => {
+  const overtimeFirst = { attendance: 0, nightAttendance: 0, overtimeHours: 2, transportFee: 0 };
+  assert.equal(core.shouldApplyDefaultTransport(overtimeFirst, 'attendance', 1), true);
+  assert.equal(core.shouldApplyDefaultTransport(overtimeFirst, 'nightAttendance', 1), true);
+  assert.equal(core.shouldApplyDefaultTransport(overtimeFirst, 'overtimeHours', 3), false);
+});
+
+test('shouldApplyDefaultTransport: 既存出勤・既存車代は上書き対象にしない', () => {
+  assert.equal(core.shouldApplyDefaultTransport({ attendance: 1, nightAttendance: 0, transportFee: 0 }, 'nightAttendance', 1), false);
+  assert.equal(core.shouldApplyDefaultTransport({ attendance: 0, nightAttendance: 0, transportFee: 500 }, 'attendance', 1), false);
 });

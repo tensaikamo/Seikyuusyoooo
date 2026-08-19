@@ -156,6 +156,15 @@ function recHasData(r){
          (r.nightAttendance||0)>0||(r.nightOvertimeHours||0)>0||
          (r.transportFee||0)>0||(Number(r.manualTotal)>0);
 }
+/* 休み状態から初めて日勤/夜勤を付ける瞬間だけ、車代の初期値を候補にする。
+   レコードが既に存在していても（先に残業等を触った場合でも）同じ扱いにする。
+   既存の車代が入っている場合は絶対に上書きしない。 */
+function shouldApplyDefaultTransport(rec,field,value){
+  if(value<=0||(field!=='attendance'&&field!=='nightAttendance'))return false;
+  const hadWork=(rec.attendance||0)>0||(rec.nightAttendance||0)>0;
+  const hasTransport=safeNum(rec.transportFee,INPUT_MAX.transportFee)>0;
+  return !hadWork&&!hasTransport;
+}
 function daysInMonthList(y,m){const out=[];const d=new Date(y,m-1,1);while(d.getMonth()===m-1){out.push(ymd(d.getFullYear(),d.getMonth()+1,d.getDate()));d.setDate(d.getDate()+1);}return out;}
 
 /* ---------- 日本の祝日（依存ゼロ・計算で算出 / 2000〜2099年） ---------- */
@@ -1190,12 +1199,12 @@ function setAtt(date,field,value){
   const max=INPUT_MAX[field];
   if(max!=null&&v>max){v=max;toast(`⚠️ ${INPUT_LABEL[field]||'値'}は ${max.toLocaleString('ja-JP')} までです`);}
   let rec=STATE.records.find(r=>r.employeeId===selEmp&&r.date===date);
-  const isNew=!rec;
   if(!rec){rec={id:uid(),employeeId:selEmp,date,attendance:0,overtimeHours:0,nightAttendance:0,nightOvertimeHours:0,transportFee:0};STATE.records.push(rec);}
+  const applyDefaultTransport=shouldApplyDefaultTransport(rec,field,v);
   rec[field]=v;
-  // 設定の「車代の初期値」は保存されるだけで使われていなかった。
-  // その日を初めて出勤にしたときだけ自動で入れる（既存の入力は上書きしない）
-  if(isNew&&v>0&&(field==='attendance'||field==='nightAttendance')){
+  // 「新規レコードか」ではなく「休み→初出勤への遷移か」で判断する。
+  // これで先に残業だけ入力した日でも初回出勤時に設定値が入り、既存車代は上書きしない。
+  if(applyDefaultTransport){
     const def=safeNum(STATE.settings.defaultTransportFee,INPUT_MAX.transportFee);
     if(def>0)rec.transportFee=def;
   }
