@@ -1,0 +1,35 @@
+name: Apply final audit fix
+
+on:
+  push:
+    branches:
+      - agent/invoice-hardening-phase0
+    paths:
+      - scripts/final_audit_fix.py
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/invoice-hardening-phase0
+          fetch-depth: 1
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Apply exact-source audit patch
+        run: python3 scripts/final_audit_fix.py
+      - name: Run full regression suite
+        run: node --test tests/*.test.js
+      - name: Commit only after tests pass
+        run: |
+          git config user.name "invoice-hardening-bot"
+          git config user.email "invoice-hardening-bot@users.noreply.github.com"
+          git add app.js sw.js tests/core-invariants.test.js
+          git commit -m "fix: close final audit gaps"
+          git push origin HEAD:agent/invoice-hardening-phase0
