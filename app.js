@@ -3,7 +3,7 @@
    日給管理・請求書 — iPhone単一HTML版（依存ゼロ）
    ネイビー×白 / IndexedDB / A4 2ページPDF
    ============================================================= */
-const APP_VERSION='1.6.3';
+const APP_VERSION='1.6.4';
 
 /* ---------- HTML escape ---------- */
 function esc(s){return String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
@@ -271,7 +271,26 @@ async function boot(){
     if(!ready) await migrate();
   }catch(e){toast('⚠️ データ読込エラー');}
   invalidateIdx();
-  if('serviceWorker'in navigator){try{await navigator.serviceWorker.register('sw.js');}catch(e){}}
+  // 更新の検出。以前は register するだけで、新しい版が出ても端末が気づかず
+  // 「アップデートされない」状態になっていた。
+  if('serviceWorker'in navigator){try{
+    const reg=await navigator.serviceWorker.register('sw.js');
+    // 新しい版を見つけたら、待たせずに切り替えさせる
+    reg.addEventListener('updatefound',()=>{
+      const w=reg.installing;if(!w)return;
+      w.addEventListener('statechange',()=>{
+        if(w.state==='installed'&&navigator.serviceWorker.controller)w.postMessage('skipWaiting');
+      });
+    });
+    // 新しい版が主導権を取ったら一度だけ読み込み直す
+    let reloaded=false;
+    navigator.serviceWorker.addEventListener('controllerchange',()=>{
+      if(reloaded)return;reloaded=true;location.reload();
+    });
+    reg.update();
+    // ホーム画面から復帰したときも確認する（iOSはここが弱く、古いまま居座りやすい）
+    document.addEventListener('visibilitychange',()=>{if(!document.hidden)reg.update().catch(()=>{});});
+  }catch(e){}}
   $('ver').textContent=APP_VERSION;
   buildClosingOptions();
   loadSettingsForm();
@@ -1888,6 +1907,20 @@ $('reset-btn').addEventListener('click',async()=>{
   if(!confirm('全データを削除しますか？元に戻せません。\n（先にバックアップ保存を推奨）'))return;
   await idbClear();try{localStorage.clear();}catch(e){}location.reload();
 });
-$('reload-btn').addEventListener('click',()=>location.reload());
+/* 「最新に更新」：以前は再読込するだけで、キャッシュ優先のため同じ古い内容が
+   返っていた。キャッシュとService Workerを消してから取り直す。
+   勤怠データ・設定・発行履歴は IndexedDB にあるので消えない。 */
+$('reload-btn').addEventListener('click',async()=>{
+  const btn=$('reload-btn');btn.disabled=true;btn.textContent='更新中…';
+  try{
+    if('caches'in window){const ks=await caches.keys();await Promise.all(ks.map(k=>caches.delete(k)));}
+    if('serviceWorker'in navigator){
+      const rs=await navigator.serviceWorker.getRegistrations();
+      await Promise.all(rs.map(r=>r.unregister()));
+    }
+  }catch(e){}
+  // キャッシュを確実に外すため、問い合わせ文字列を付けて読み直す
+  location.replace(location.pathname+'?u='+Date.now());
+});
 
 bindSettings();
