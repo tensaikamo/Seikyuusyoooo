@@ -617,7 +617,7 @@ i.dot-night{background:var(--night);}
           <div><label class="fl">消費税率</label><select id="set-tax"><option value="10">10%</option><option value="8">8%</option><option value="0">なし（0%）</option></select></div>
           <div><label class="fl">締め日</label><select id="set-closing"></select></div>
         </div>
-        <div class="field"><label class="fl">車代の初期値（円）</label><input type="number" id="set-transport" inputmode="numeric" placeholder="1000"></div>
+        <div class="field"><label class="fl">車代の初期値（円）</label><input type="number" id="set-transport" inputmode="numeric" min="0" max="100000" step="1" placeholder="1000"></div>
         <div class="field"><label class="fl">月間の売上目標（円）<span style="color:var(--mut);font-weight:400;">／空欄なら直近3ヶ月の平均</span></label><input type="number" id="set-goal" inputmode="numeric" placeholder="例：500000"></div>
       </div>
       <!-- 発行履歴（電子帳簿保存法） -->
@@ -663,8 +663,8 @@ i.dot-night{background:var(--night);}
       <button class="modal-close" id="emp-modal-close" type="button">✕</button>
     </div>
     <div class="field"><label class="fl">名前</label><input type="text" id="emp-name" placeholder="例：田中"></div>
-    <div class="field"><label class="fl">日給（円）</label><input type="number" id="emp-wage" inputmode="numeric" placeholder="例：18000"></div>
-    <div class="field"><label class="fl">夜間単価（円）<span style="color:var(--mut);font-weight:400;">／夜勤がなければ空欄でOK</span></label><input type="number" id="emp-nwage" inputmode="numeric" placeholder="例：22500"></div>
+    <div class="field"><label class="fl">日給（円）</label><input type="number" id="emp-wage" inputmode="numeric" min="0" max="1000000" step="1" placeholder="例：18000"></div>
+    <div class="field"><label class="fl">夜間単価（円）<span style="color:var(--mut);font-weight:400;">／夜勤がなければ空欄でOK</span></label><input type="number" id="emp-nwage" inputmode="numeric" min="0" max="1000000" step="1" placeholder="例：22500"></div>
     <div id="emp-ot-hint" style="font-size:.74rem;color:var(--sub);margin-bottom:14px;"></div>
     <button class="btn btn-navy" id="emp-save" type="button">保存</button>
     <button class="btn btn-danger btn-sm" id="emp-delete" type="button" style="margin-top:9px;display:none;">この従業員を削除</button>

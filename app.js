@@ -3,7 +3,7 @@
    日給管理・請求書 — iPhone単一HTML版（依存ゼロ）
    ネイビー×白 / IndexedDB / A4 2ページPDF
    ============================================================= */
-const APP_VERSION='1.6.1';
+const APP_VERSION='1.6.2';
 
 /* ---------- HTML escape ---------- */
 function esc(s){return String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
@@ -110,21 +110,36 @@ function overtimeRate(wage){return wage/8*1.25;}
  *  emp.dailyWage … 日勤の日給 / emp.nightWage … 夜勤の夜間単価（未設定なら0）
  *  rec.attendance/overtimeHours … 日勤の出勤数/残業h
  *  rec.nightAttendance/nightOvertimeHours … 夜勤の出勤数/残業h */
+/* 入力の上限。桁を打ち間違えても素通りしないようにする */
+const INPUT_MAX={attendance:3,nightAttendance:3,overtimeHours:24,nightOvertimeHours:24,
+  transportFee:100000,manualTotal:10000000};
+const INPUT_LABEL={overtimeHours:'残業時間',nightOvertimeHours:'夜間残業',
+  transportFee:'車代',manualTotal:'手入力の合計',attendance:'出勤数',nightAttendance:'夜勤の出勤数'};
+/* 数値の正規化。NaN・Infinity・負値・桁の打ち間違いを計算に持ち込まない。
+   入力時のチェックをすり抜けた既存データやバックアップ復元にも効かせる。 */
+function safeNum(v,max){
+  const n=Number(v);
+  if(!Number.isFinite(n)||n<0)return 0;
+  return max!=null&&n>max?max:n;
+}
+const WAGE_MAX=1000000;
 function dailyTotal(rec,emp){
   // 後方互換: 第2引数に数値(dailyWage)が渡された場合も動くようにする
-  const dayWage=(typeof emp==='number')?emp:((emp&&emp.dailyWage)||0);
-  const nightWage=(typeof emp==='number')?0:((emp&&emp.nightWage)||0);
-  // 日勤
-  const wage=Math.round(dayWage*(rec.attendance||0));
-  const ot=Math.round(overtimeRate(dayWage)*(rec.overtimeHours||0));
+  const dayWage=safeNum((typeof emp==='number')?emp:(emp&&emp.dailyWage),WAGE_MAX);
+  const nightWage=safeNum((typeof emp==='number')?0:(emp&&emp.nightWage),WAGE_MAX);
+  // 日勤。残業はその区分に出勤がある日だけ計上する
+  // （「休」にしても残業hが残っていると課金されていた不具合の対策）
+  const att=safeNum(rec.attendance,INPUT_MAX.attendance), natt=safeNum(rec.nightAttendance,INPUT_MAX.nightAttendance);
+  const wage=Math.round(dayWage*att);
+  const ot=att>0?Math.round(overtimeRate(dayWage)*safeNum(rec.overtimeHours,INPUT_MAX.overtimeHours)):0;
   // 夜勤
-  const nwage=Math.round(nightWage*(rec.nightAttendance||0));
-  const not=Math.round(overtimeRate(nightWage)*(rec.nightOvertimeHours||0));
-  const tr=Math.round(rec.transportFee||0);
+  const nwage=Math.round(nightWage*natt);
+  const not=natt>0?Math.round(overtimeRate(nightWage)*safeNum(rec.nightOvertimeHours,INPUT_MAX.nightOvertimeHours)):0;
+  const tr=Math.round(safeNum(rec.transportFee,INPUT_MAX.transportFee));
   const autoTotal=wage+ot+nwage+not+tr;
   // 手入力の上書き（その日だけ合計を固定）
-  const manual=Number(rec.manualTotal);
-  const overridden=Number.isFinite(manual)&&manual>0;
+  const manual=safeNum(rec.manualTotal,INPUT_MAX.manualTotal);
+  const overridden=manual>0;
   const total=overridden?Math.round(manual):autoTotal;
   return {wage,ot,nwage,not,tr,autoTotal,total,overridden};
 }
@@ -825,8 +840,8 @@ function dayControlsHTML(ds,rec,emp){
           ${attOpts.map(v=>`<button class="att-b${rec.attendance===v?' sel':''}" onclick="setAtt('${ds}','attendance',${v})">${v}</button>`).join('')}
         </div>
         <div class="att-sub">
-          <div class="att-mini"><label>残業h</label><input type="number" inputmode="decimal" value="${rec.overtimeHours||''}" placeholder="0" onchange="setAtt('${ds}','overtimeHours',this.value)"></div>
-          <div class="att-mini"><label>車代</label><input type="number" inputmode="numeric" value="${rec.transportFee||''}" placeholder="0" onchange="setAtt('${ds}','transportFee',this.value)"></div>
+          <div class="att-mini"><label>残業h</label><input type="number" inputmode="decimal" min="0" max="24" step="0.5" value="${rec.overtimeHours||''}" placeholder="0" onchange="setAtt('${ds}','overtimeHours',this.value)"></div>
+          <div class="att-mini"><label>車代</label><input type="number" inputmode="numeric" min="0" max="100000" step="1" value="${rec.transportFee||''}" placeholder="0" onchange="setAtt('${ds}','transportFee',this.value)"></div>
         </div>
         ${showNight?`
         <div class="night-sec">
@@ -836,13 +851,13 @@ function dayControlsHTML(ds,rec,emp){
             ${attOpts.map(v=>`<button class="att-b night${rec.nightAttendance===v?' sel':''}" onclick="setAtt('${ds}','nightAttendance',${v})">${v}</button>`).join('')}
           </div>
           <div class="att-sub">
-            <div class="att-mini"><label>夜残業h</label><input type="number" inputmode="decimal" value="${rec.nightOvertimeHours||''}" placeholder="0" onchange="setAtt('${ds}','nightOvertimeHours',this.value)"></div>
+            <div class="att-mini"><label>夜残業h</label><input type="number" inputmode="decimal" min="0" max="24" step="0.5" value="${rec.nightOvertimeHours||''}" placeholder="0" onchange="setAtt('${ds}','nightOvertimeHours',this.value)"></div>
           </div>
           ${nightNoRate?`<div class="warn-strip">夜間単価が未設定のため <b>0円</b> で計算されています。「編集」から夜間単価を設定してください</div>`:''}
         </div>`:(nightEnabled?`<button class="night-add" onclick="toggleNight('${ds}')">＋ 夜勤を入力</button>`:'')}
         ${t.overridden||manualExpanded.has(xk(ds))?`
         <div class="manual-sec">
-          <div class="att-mini"><label>合計を手入力</label><input type="number" inputmode="numeric" value="${rec.manualTotal||''}" placeholder="自動計算" onchange="setAtt('${ds}','manualTotal',this.value)"></div>
+          <div class="att-mini"><label>合計を手入力</label><input type="number" inputmode="numeric" min="0" max="10000000" step="1" value="${rec.manualTotal||''}" placeholder="自動計算" onchange="setAtt('${ds}','manualTotal',this.value)"></div>
           ${t.overridden?`<button class="manual-reset" onclick="setAtt('${ds}','manualTotal',0)">自動に戻す</button>`:''}
         </div>`:`<button class="manual-add" onclick="toggleManual('${ds}')">✎ 合計を手入力</button>`}
         ${has?`<div class="day-total${t.overridden?' ovr':''}">${t.overridden?'<span class="ovr-tag">手動</span>':''}${yen(t.total)}</div>`:''}`;
@@ -984,10 +999,16 @@ function renderDaySheet(){
 
 function setAtt(date,field,value){
   if(!selEmp)return;
-  let v=parseFloat(value)||0; if(v<0)v=0;
+  let v=parseFloat(value);
+  if(!Number.isFinite(v)||v<0)v=0;      // 文字列・Infinity・負の値を弾く
+  const max=INPUT_MAX[field];
+  if(max!=null&&v>max){v=max;toast(`⚠️ ${INPUT_LABEL[field]||'値'}は ${max.toLocaleString('ja-JP')} までです`);}
   let rec=STATE.records.find(r=>r.employeeId===selEmp&&r.date===date);
   if(!rec){rec={id:uid(),employeeId:selEmp,date,attendance:0,overtimeHours:0,nightAttendance:0,nightOvertimeHours:0,transportFee:0};STATE.records.push(rec);}
   rec[field]=v;
+  // 「休」にしたら、その区分の残業も一緒に消す（残ったまま課金されるのを防ぐ）
+  if(field==='attendance'&&v===0)rec.overtimeHours=0;
+  if(field==='nightAttendance'&&v===0)rec.nightOvertimeHours=0;
   if(field==='manualTotal'&&v===0)manualExpanded.delete(xk(date));
   saveRecords();
   haptic();
@@ -1104,7 +1125,9 @@ $('emp-save').addEventListener('click',()=>{
   const nwageRaw=$('emp-nwage').value.trim();
   const nwage=nwageRaw===''?0:(parseInt(nwageRaw,10)||0);
   if(!name){toast('⚠️ 名前を入力してください');return;}
-  if(isNaN(wage)||wage<=0){toast('⚠️ 日給を正しく入力してください');return;}
+  if(!Number.isFinite(wage)||wage<=0){toast('⚠️ 日給を正しく入力してください');return;}
+  if(wage>WAGE_MAX){toast(`⚠️ 日給は ${WAGE_MAX.toLocaleString('ja-JP')} 円までです。桁を確認してください`);return;}
+  if(nwage>WAGE_MAX){toast(`⚠️ 夜間単価は ${WAGE_MAX.toLocaleString('ja-JP')} 円までです。桁を確認してください`);return;}
   if(editEmpId){
     const e=STATE.employees.find(x=>x.id===editEmpId);
     if(e){e.name=name;e.dailyWage=wage;e.nightWage=nwage;}
