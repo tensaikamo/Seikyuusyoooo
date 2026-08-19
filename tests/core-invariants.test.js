@@ -189,3 +189,20 @@ test('periodReport: 同一従業員・同一日の重複レコードを二重請
   const rep = core.periodReport(emp, '2026-08-01', '2026-08-31');
   assert.equal(rep.grandTotal, 10000);
 });
+
+
+test('発行履歴の永続化完了後にだけ印刷へ進む', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'app.js'), 'utf8');
+  const start = src.indexOf("$('pv-print').addEventListener('click',async()=>{");
+  assert.notEqual(start, -1, '印刷ハンドラが async ではない');
+  const end = src.indexOf("\n});", start);
+  assert.notEqual(end, -1, '印刷ハンドラ終端が見つからない');
+  const handler = src.slice(start, end);
+  const save = handler.indexOf('await saveInvoiceLog();');
+  const print = handler.indexOf('window.print();');
+  const rollback = handler.indexOf('STATE.invoiceLog.splice(i,1);');
+  assert.ok(save >= 0, 'invoiceLog 保存を await していない');
+  assert.ok(print > save, '保存完了より先に印刷へ進んでいる');
+  assert.ok(rollback > save, '保存失敗時のメモリ上の履歴巻き戻しがない');
+  assert.match(handler, /印刷は開始していません/);
+});

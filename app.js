@@ -1365,10 +1365,23 @@ function showPreview(screenHTML,printHTML,issue,alreadyLogged){
   $('pv-scroll').scrollTop=0;
 }
 $('pv-close').addEventListener('click',()=>{$('pv-overlay').classList.remove('show');pendingIssue=null;});
-$('pv-print').addEventListener('click',()=>{
+$('pv-print').addEventListener('click',async()=>{
+  const btn=$('pv-print');
+  if(btn&&btn.disabled)return;
+  if(btn)btn.disabled=true;
   if(pendingIssue&&!pendingLogged){
     STATE.invoiceLog.push(pendingIssue);
-    saveInvoiceLog();
+    try{
+      // 発行履歴の永続化が完了してから印刷へ進む。保存失敗時は
+      // 「発行したのに履歴がない」状態を作らない。
+      await saveInvoiceLog();
+    }catch(e){
+      const i=STATE.invoiceLog.lastIndexOf(pendingIssue);
+      if(i>=0)STATE.invoiceLog.splice(i,1);
+      if(btn)btn.disabled=false;
+      toast('⚠️ 発行履歴を保存できませんでした。印刷は開始していません');
+      return;
+    }
     pendingLogged=true;
     renderInvoiceLog();
     stampSeal();
@@ -1378,8 +1391,13 @@ $('pv-print').addEventListener('click',()=>{
   const prevTitle=document.title;
   if(pendingIssue)document.title=issueFileName(pendingIssue);
   setTimeout(()=>{
-    window.print();
-    setTimeout(()=>{document.title=prevTitle;},1000);
+    try{window.print();}
+    finally{
+      setTimeout(()=>{
+        document.title=prevTitle;
+        if(btn)btn.disabled=false;
+      },1000);
+    }
   },60);
 });
 
