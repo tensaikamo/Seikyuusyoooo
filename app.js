@@ -374,6 +374,7 @@ function normalizeBackupIssue(raw,index){
     taxRate:backupNum(o.taxRate,`発行履歴${index+1}件目の税率`,0,100),
     total:backupNum(o.total,`発行履歴${index+1}件目の合計`,-1000000000000,1000000000000),
     batch:!!o.batch,voided:!!o.voided,voidReason:backupText(o.voidReason,`発行履歴${index+1}件目の取消理由`,1000),
+    ...(o.voidOperator?{voidOperator:backupText(o.voidOperator,`発行履歴${index+1}件目の取消担当者`,200)}:{}),
     ...(o.voidedAt?{voidedAt:backupText(o.voidedAt,`発行履歴${index+1}件目の取消日時`,80)}:{}),
     ...(o.voidOf?{voidOf:backupId(o.voidOf,`発行履歴${index+1}件目の取消元`)}:{}),
     snapshot
@@ -1410,9 +1411,10 @@ function renderBill(){
 }
 
 /* ===== PDF ===== */
-/* ---------- 発行（電子帳簿保存法）---------- */
+/* ---------- 発行履歴 ---------- */
 /* 発行時点の内容をスナップショットとして保存する。あとで勤怠を直しても
-   発行済みの請求書の内容は変わらない（これが電帳法上も正しい挙動）。 */
+   発行済み請求書の再表示内容を変えないための監査補助。
+   法令上の保存要件への適合を、このアプリ単体で保証するものではない。 */
 function buildIssue(reports,period,batch){
   const s=STATE.settings;
   let subtotal=0;reports.forEach(r=>subtotal+=r.rep.grandTotal);
@@ -1946,7 +1948,7 @@ function renderDataHealth(){
     正しい値に直してください。</div>`;
 }
 
-/* ---------- 発行履歴（電子帳簿保存法）---------- */
+/* ---------- 発行履歴 ---------- */
 function renderInvoiceLog(){
   const list=$('log-list');if(!list)return;
   if(!STATE.invoiceLog.length){
@@ -1956,15 +1958,19 @@ function renderInvoiceLog(){
   list.innerHTML=STATE.invoiceLog.slice().reverse().map(o=>{
     const dt=new Date(o.issuedAt);
     const stamp=`${dt.getFullYear()}/${pad2(dt.getMonth()+1)}/${pad2(dt.getDate())} ${pad2(dt.getHours())}:${pad2(dt.getMinutes())}`;
-    return `<div class="log-item${o.voided?' void':''}">
+    const cancellation=STATE.invoiceLog.find(x=>x&&x.voidOf===o.id);
+    const isVoided=!!o.voided||!!cancellation;
+    const voidReason=o.voidReason||(cancellation&&cancellation.voidReason)||'';
+    const voidOperator=o.voidOperator||(cancellation&&cancellation.voidOperator)||'';
+    return `<div class="log-item${isVoided?' void':''}">
       <div class="log-top">
-        <span class="log-no">No. ${esc(o.invoiceNo)}${o.voided?'<span class="log-tag">取消済</span>':''}</span>
+        <span class="log-no">No. ${esc(o.invoiceNo)}${isVoided?'<span class="log-tag">取消済</span>':''}</span>
         <span class="log-amt">${yen(o.total)}</span>
       </div>
-      <div class="log-meta">${esc(o.clientName)} 御中　／　${esc(o.period.periodLabel)}<br>発行 ${stamp}　${esc(issueFileName(o))}${o.voided&&o.voidReason?'<br>取消理由：'+esc(o.voidReason):''}</div>
+      <div class="log-meta">${esc(o.clientName)} 御中　／　${esc(o.period.periodLabel)}<br>発行 ${stamp}　${esc(issueFileName(o))}${isVoided&&voidReason?'<br>取消理由：'+esc(voidReason):''}${isVoided&&voidOperator?'<br>取消担当：'+esc(voidOperator):''}</div>
       <div class="log-btns">
         <button type="button" onclick="reopenIssue('${o.id}')">再表示・再印刷</button>
-        ${o.voided?'':`<button type="button" class="danger" onclick="voidIssue('${o.id}')">取り消す</button>`}
+        ${isVoided?'':`<button type="button" class="danger" onclick="voidIssue('${o.id}')">取り消す</button>`}
       </div>
     </div>`;
   }).join('');
@@ -1983,23 +1989,34 @@ function reopenIssue(id){
   );
 }
 window.reopenIssue=reopenIssue;
-/* 取消は「削除」ではなく取消記録の追記で行う（真実性の確保要件） */
-function voidIssue(id){
+/* 新規の取消は元の発行記録を変更せず、取消記録だけを追記する。
+   旧バージョンで voided=true が付いた履歴も表示上は引き続き認識する。 */
+async function voidIssue(id){
   const o=STATE.invoiceLog.find(x=>x.id===id);
-  if(!o||o.voided)return;
+  if(!o||o.voided||STATE.invoiceLog.some(x=>x&&x.voidOf===o.id))return;
   const reason=prompt('取り消す理由を入力してください（記録として残ります）');
   if(reason===null)return;
-  o.voided=true;
-  o.voidReason=reason||'（理由未記入）';
-  o.voidedAt=new Date().toISOString();
-  STATE.invoiceLog.push({
-    id:uid(), issuedAt:o.voidedAt, invoiceNo:o.invoiceNo+'-取消',
-    issueDate:o.issueDate, period:o.period,
+  const operator=prompt('処理担当者名を入力してください（記録として残ります）');
+  if(operator===null)return;
+  if(!operator.trim()){toast('⚠️ 処理担当者名を入力してください');return;}
+  const voidedAt=new Date().toISOString();
+  const cancellation={
+    id:uid(), issuedAt:voidedAt, invoiceNo:o.invoiceNo+'-取消',
+    issueDate:o.issueDate, period:JSON.parse(JSON.stringify(o.period)),
     clientName:o.clientName, issuerName:o.issuerName,
     subtotal:-o.subtotal, tax:-o.tax, taxRate:o.taxRate, total:-o.total,
-    batch:o.batch, voided:true, voidReason:o.voidReason, voidOf:o.id, snapshot:null
-  });
-  saveInvoiceLog();
+    batch:o.batch, voided:true, voidReason:reason||'（理由未記入）',
+    voidOperator:operator.trim(), voidedAt, voidOf:o.id, snapshot:null
+  };
+  STATE.invoiceLog.push(cancellation);
+  try{
+    await saveInvoiceLog();
+  }catch(e){
+    const i=STATE.invoiceLog.lastIndexOf(cancellation);
+    if(i>=0)STATE.invoiceLog.splice(i,1);
+    toast('⚠️ 取消記録を保存できませんでした。取消は成立していません');
+    return;
+  }
   renderInvoiceLog();
   toast('取消記録を追記しました');
 }
@@ -2013,18 +2030,17 @@ $('rule-btn').addEventListener('click',()=>{
   const txt=`電子取引データの訂正及び削除の防止に関する事務処理規程
 
 （目的）
-第1条　この規程は、電子計算機を使用して作成する国税関係帳簿書類の保存方法の
-特例に関する法律第7条に定められた電子取引の取引情報に係る電磁的記録の保存
-義務を履行するため、${name}（以下「当方」という。）における電子取引の取引
+第1条　この規程は、電子帳簿保存法に定められた電子取引の取引情報に係る
+電磁的記録の保存義務を履行するため、${name}（以下「当方」という。）における電子取引の取引
 情報に係る電磁的記録の訂正及び削除の防止に関する事項を定め、その適正な保存
 を目的とする。
 
 （適用範囲）
 第2条　この規程は、当方の行う全ての電子取引に係る電磁的記録について適用する。
 
-（管理責任者）
+（管理責任者及び処理責任者）
 第3条　電子取引の取引情報に係る電磁的記録の管理責任者は、${name}の代表者と
-する。
+する。処理責任者は、管理責任者が事前に指名した者とする。
 
 （電子取引の範囲）
 第4条　当方における電子取引の範囲は次のとおりとする。
@@ -2042,13 +2058,18 @@ $('rule-btn').addEventListener('click',()=>{
 
 （訂正削除を行う場合）
 第7条　業務処理上やむを得ない理由により訂正又は削除を行う場合は、管理責任者
-の承認を得たうえで、訂正又は削除の年月日、理由及び内容を記録として残し、
-当該記録を取引データと合わせて保存する。取消しを行う場合は、元の記録を
-削除せず、取消しの記録を追加することにより行う。
+の承認を得たうえで、訂正又は削除の年月日、理由、内容及び処理担当者の氏名を
+記録として残し、当該記録を取引データと合わせて保存する。取消しを行う場合は、
+元の記録を削除せず、取消しの記録を追加することにより行う。
 
-（備考）
-本規程で定める記録は、当方が使用する「日給管理・請求書」アプリの発行履歴
-機能により、発行時点の内容のまま保存され、削除できない形で管理される。
+（本アプリの位置付け）
+第8条　「日給管理・請求書」アプリは、発行時点のスナップショット及び取消記録を
+保存するための運用補助機能として使用する。本アプリにはバックアップ復元及び
+全データ削除の機能があるため、本アプリ単体を「訂正削除ができないシステム」と
+して扱わない。これらの機能により保存対象データを訂正又は削除する場合は、
+管理責任者の承認を得て、実施年月日、理由、内容及び処理担当者を別途記録し、
+保存する。法令上必要となる保存期間、検索性その他の要件は、本規程に沿って
+当方の責任で運用する。
 
 （附則）
 この規程は、${today.getFullYear()}年${today.getMonth()+1}月${today.getDate()}日から施行する。

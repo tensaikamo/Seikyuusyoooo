@@ -288,3 +288,28 @@ test('最新更新は当アプリのcacheとservice workerだけを対象にす�
   assert.doesNotMatch(body, /getRegistrations\(\)/);
   assert.doesNotMatch(body, /Promise\.all\(ks\.map\(k=>caches\.delete\(k\)\)\)/);
 });
+
+
+test('取消は元の発行記録を変更せず追記保存する', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'app.js'), 'utf8');
+  const start = src.indexOf('async function voidIssue(id){');
+  assert.notEqual(start, -1);
+  const end = src.indexOf('\nwindow.voidIssue=voidIssue;', start);
+  const body = src.slice(start, end);
+  assert.doesNotMatch(body, /o\.voided\s*=\s*true/);
+  assert.doesNotMatch(body, /o\.voidReason\s*=/);
+  assert.match(body, /voidOperator:operator\.trim\(\)/);
+  assert.match(body, /STATE\.invoiceLog\.push\(cancellation\)/);
+  assert.match(body, /await saveInvoiceLog\(\)/);
+  assert.match(body, /取消は成立していません/);
+});
+
+test('事務処理規程はアプリを削除不能システムと誤表現しない', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'app.js'), 'utf8');
+  const start = src.indexOf("$('rule-btn').addEventListener('click',()=>{");
+  const end = src.indexOf('/* データ管理 */', start);
+  const body = src.slice(start, end);
+  assert.match(body, /処理担当者/);
+  assert.match(body, /本アプリ単体を「訂正削除ができないシステム」と/);
+  assert.doesNotMatch(body, /削除できない形で管理される/);
+});
