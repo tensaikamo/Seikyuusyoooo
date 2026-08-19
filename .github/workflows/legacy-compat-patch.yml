@@ -1,22 +1,22 @@
 name: Apply legacy invoice compatibility patch
 
 on:
-  push:
+  pull_request:
     branches:
-      - agent/invoice-hardening-final-audit
-    paths:
-      - .github/workflows/legacy-compat-patch.yml
+      - main
+    types:
+      - opened
 
 permissions:
   contents: write
 
 jobs:
   patch:
-    if: github.actor != 'github-actions[bot]'
+    if: github.head_ref == 'agent/invoice-hardening-final-audit'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - name: Checkout branch
+      - name: Checkout isolated audit branch
         uses: actions/checkout@v4
         with:
           ref: agent/invoice-hardening-final-audit
