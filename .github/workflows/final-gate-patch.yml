@@ -1,0 +1,40 @@
+name: Apply final gate patch
+
+on:
+  push:
+    branches:
+      - agent/invoice-hardening-phase0
+    paths:
+      - .github/workflows/final-gate-patch.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout branch
+        uses: actions/checkout@v4
+        with:
+          ref: agent/invoice-hardening-phase0
+          fetch-depth: 0
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Apply guarded patch
+        run: python3 tools/apply_final_gate_patch.py
+      - name: Run all tests
+        run: node --test tests/*.test.js
+      - name: Remove one-shot patch machinery
+        run: rm -f tools/apply_final_gate_patch.py .github/workflows/final-gate-patch.yml
+      - name: Commit verified result
+        run: |
+          git config user.name "invoice-hardening-bot"
+          git config user.email "invoice-hardening-bot@users.noreply.github.com"
+          git add app.js tests/core-invariants.test.js tools/apply_final_gate_patch.py .github/workflows/final-gate-patch.yml
+          git commit -m "fix: validate invoice snapshots and Safari print fallback"
+          git push origin HEAD:agent/invoice-hardening-phase0
