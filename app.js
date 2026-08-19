@@ -2101,10 +2101,15 @@ $('reset-btn').addEventListener('click',async()=>{
 $('reload-btn').addEventListener('click',async()=>{
   const btn=$('reload-btn');btn.disabled=true;btn.textContent='更新中…';
   try{
-    if('caches'in window){const ks=await caches.keys();await Promise.all(ks.map(k=>caches.delete(k)));}
+    // 同一origin上の別PWAを巻き込まない。当アプリが作る invoice-* だけを消す。
+    if('caches'in window){
+      const ks=await caches.keys();
+      await Promise.all(ks.filter(k=>k.startsWith('invoice-')).map(k=>caches.delete(k)));
+    }
     if('serviceWorker'in navigator){
-      const rs=await navigator.serviceWorker.getRegistrations();
-      await Promise.all(rs.map(r=>r.unregister()));
+      // 現在のページを支配しているregistrationだけを解除する。
+      const reg=await navigator.serviceWorker.getRegistration();
+      if(reg)await reg.unregister();
     }
   }catch(e){}
   // キャッシュを確実に外すため、問い合わせ文字列を付けて読み直す

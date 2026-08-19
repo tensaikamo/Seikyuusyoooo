@@ -276,3 +276,15 @@ test('復元処理は検証完了後に1トランザクションで永続化す�
   const mutate = body.indexOf('STATE.employees=o.employees');
   assert.ok(validate >= 0 && persist > validate && mutate > persist, '検証→永続化→STATE反映の順になっていない');
 });
+
+
+test('最新更新は当アプリのcacheとservice workerだけを対象にする', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'app.js'), 'utf8');
+  const start = src.indexOf("$('reload-btn').addEventListener('click',async()=>{");
+  assert.notEqual(start, -1);
+  const body = src.slice(start, src.indexOf('\nbindSettings();', start));
+  assert.match(body, /filter\(k=>k\.startsWith\('invoice-'\)\)/);
+  assert.match(body, /navigator\.serviceWorker\.getRegistration\(\)/);
+  assert.doesNotMatch(body, /getRegistrations\(\)/);
+  assert.doesNotMatch(body, /Promise\.all\(ks\.map\(k=>caches\.delete\(k\)\)\)/);
+});
