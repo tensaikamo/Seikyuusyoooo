@@ -56,6 +56,17 @@ new="""  const logIds=new Set();
 """
 app=once(app,old,new,'remove duplicate legacy declaration')
 
+old="""test('validateBackupPayload: 入力上限超過と未知の将来schemaを拒否する', () => {
+  const high = sampleBackup();
+  high.records[0].transportFee = 100001;
+"""
+new="""test('validateBackupPayload: 入力上限超過と未知の将来schemaを拒否する', () => {
+  const high = sampleBackup();
+  high.schemaVersion = 1;
+  high.records[0].transportFee = 100001;
+"""
+test=once(test,old,new,'strict current-cap test schema')
+
 anchor="""test('validateBackupPayload: 発行スナップショット内部も数値型まで検証・正規化する', () => {\n"""
 block="""test('validateBackupPayload: schemaVersionなしの旧ライブデータは上限導入前のraw値を保持できる', () => {\n  const legacy = sampleBackup();\n  legacy.employees[0].dailyWage = 2000000;\n  legacy.records[0].overtimeHours = 100;\n  legacy.records[0].nightOvertimeHours = 100;\n  legacy.records[0].transportFee = 1000000;\n  legacy.records[0].manualTotal = 50000000;\n  const out = core.validateBackupPayload(legacy);\n  assert.equal(out.employees[0].dailyWage, 2000000);\n  assert.equal(out.records[0].overtimeHours, 100);\n  assert.equal(out.records[0].transportFee, 1000000);\n  assert.equal(out.records[0].manualTotal, 50000000);\n\n  const strict = sampleBackup();\n  strict.schemaVersion = 1;\n  strict.employees[0].dailyWage = 2000000;\n  strict.records[0].overtimeHours = 100;\n  strict.records[0].transportFee = 1000000;\n  strict.records[0].manualTotal = 50000000;\n  assert.throws(() => core.validateBackupPayload(strict), /範囲外/);\n});\n\n"""+anchor
 test=once(test,anchor,block,'legacy live compatibility test')
