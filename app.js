@@ -549,7 +549,7 @@ function validateBackupPayload(raw){
       backupFail(`発行履歴${i+1}件目の取消金額が元の発行記録と一致しません`);
     }
   });
-  return {schemaVersion:BACKUP_SCHEMA_VERSION,employees,records,settings:normalizeBackupSettings(o.settings),invoiceLog};
+  return {schemaVersion:BACKUP_SCHEMA_VERSION,employees,records,settings:normalizeBackupSettings(o.settings,legacyBackup),invoiceLog};
 }
 
 /* ---------- BOOT ---------- */

@@ -316,6 +316,25 @@ test('validateBackupPayload: schemaVersionなしの旧ライブデータは上�
   assert.throws(() => core.validateBackupPayload(strict), /範囲外/);
 });
 
+test('validateBackupPayload: schemaVersionなしの旧設定値は上限導入前のraw値を保持し、新schemaでは拒否する', () => {
+  const legacy = sampleBackup();
+  legacy.settings.defaultTransportFee = 1000000;
+  legacy.settings.monthlyGoal = 2000000000000;
+  const out = core.validateBackupPayload(legacy);
+  assert.equal(out.settings.defaultTransportFee, 1000000);
+  assert.equal(out.settings.monthlyGoal, 2000000000000);
+
+  const strictTransport = sampleBackup();
+  strictTransport.schemaVersion = 1;
+  strictTransport.settings.defaultTransportFee = 1000000;
+  assert.throws(() => core.validateBackupPayload(strictTransport), /範囲外/);
+
+  const strictGoal = sampleBackup();
+  strictGoal.schemaVersion = 1;
+  strictGoal.settings.monthlyGoal = 2000000000000;
+  assert.throws(() => core.validateBackupPayload(strictGoal), /範囲外/);
+});
+
 test('validateBackupPayload: 発行スナップショット内部も数値型まで検証・正規化する', () => {
   const good = sampleBackup();
   good.invoiceLog = [sampleIssue(sampleInvoiceSnapshot())];
