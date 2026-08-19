@@ -178,9 +178,7 @@ test('billingPeriod: 1〜28日締めは月をまたいでも空白・重複が�
   }
 });
 
-test('periodReport: 同一従業員・同一日の重複レコードを二重請求しない', {
-  todo: 'Phase 1/2: 復元時の重複拒否 + 集計側の防御を実装後に todo を外す。'
-}, () => {
+test('periodReport: 同一従業員・同一日の重複レコードを二重請求しない', () => {
   const emp = { id: 'emp-1', name: 'A', dailyWage: 10000, nightWage: 0 };
   core.STATE.employees = [emp];
   core.STATE.records = [

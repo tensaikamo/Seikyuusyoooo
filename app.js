@@ -240,7 +240,14 @@ function calcTax(sub,rate){return Math.floor(sub*(rate/100));}
 
 /** 期間レポート（従業員1人）*/
 function periodReport(emp,start,end){
-  const recs=(idx().byEmp.get(emp.id)||[]).filter(r=>r.date>=start&&r.date<=end&&recHasData(r));
+  // 同一従業員・同一日の重複レコードは1日1件として扱う。
+  // 通常UIでは重複を作らないが、旧バックアップ等に重複が混ざっても
+  // 請求額を二重計上しないための最終防御。画面表示と同じく後勝ちにする。
+  const recMap=new Map();
+  (idx().byEmp.get(emp.id)||[])
+    .filter(r=>r.date>=start&&r.date<=end&&recHasData(r))
+    .forEach(r=>recMap.set(r.date,r));
+  const recs=[...recMap.values()];
   let att=0,natt=0,wage=0,ot=0,nwage=0,not=0,tr=0;
   recs.forEach(r=>{
     const t=dailyTotal(r,emp);
