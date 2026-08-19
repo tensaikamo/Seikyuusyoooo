@@ -271,7 +271,7 @@ test('validateBackupPayload: 入力上限超過と未知の将来schemaを拒否
 
 function sampleInvoiceSnapshot() {
   return {
-    settings: { defaultTransportFee: 1000, taxRate: 10, closingDay: 31, monthlyGoal: 0, issuer: {}, client: {}, bank: {} },
+    settings: { defaultTransportFee: 1000, taxRate: 10, closingDay: 31, monthlyGoal: 0, issuer: { companyName: '発行者' }, client: { companyName: '取引先' }, bank: {} },
     reports: [{
       emp: { id: 'snap_emp', name: 'A', dailyWage: 10000, nightWage: 0, createdAt: '2026-08-01T00:00:00.000Z' },
       rep: {
@@ -318,7 +318,7 @@ test('validateBackupPayload: snapshot集計値と発行金額の改ざんを拒�
   const snapAggregate = sampleInvoiceSnapshot();
   snapAggregate.reports[0].rep.grandTotal = 999999;
   badAggregate.invoiceLog = [sampleIssue(snapAggregate)];
-  assert.throws(() => core.validateBackupPayload(badAggregate), /集計値が勤怠明細と一致/);
+  assert.throws(() => core.validateBackupPayload(badAggregate), /(集計値が勤怠明細と一致|内訳合計と合計金額が一致)/);
 
   const badIssue = sampleBackup();
   const issue = sampleIssue(sampleInvoiceSnapshot());
@@ -348,6 +348,36 @@ test('validateBackupPayload: 取消元・取消金額・重複取消の整合性
   assert.throws(() => core.validateBackupPayload(duplicate), /複数の取消記録/);
 });
 
+test('validateBackupPayload: schemaVersionなしの旧発行snapshotは当時の計算結果を保存したまま復元できる', () => {
+  const legacy = sampleBackup();
+  const snap = sampleInvoiceSnapshot();
+  const rec = snap.reports[0].rep.records[0];
+  rec.attendance = 0; rec.overtimeHours = 2; rec.transportFee = 1000;
+  const rep = snap.reports[0].rep;
+  rep.totalAttendance = 0; rep.totalDailyWage = 0; rep.totalOvertimePay = 3125; rep.totalTransportFee = 1000; rep.grandTotal = 4125;
+  const issue = sampleIssue(snap);
+  issue.subtotal = 4125; issue.tax = 412; issue.total = 4537;
+  legacy.invoiceLog = [issue];
+  assert.doesNotThrow(() => core.validateBackupPayload(legacy));
+
+  const strict = sampleBackup(); strict.schemaVersion = 1; strict.invoiceLog = [issue];
+  assert.throws(() => core.validateBackupPayload(strict), /集計値が勤怠明細と一致/);
+});
+
+test('validateBackupPayload: 旧発行snapshotの過去上限超過値は履歴として保持し、新schemaでは拒否する', () => {
+  const legacy = sampleBackup();
+  const snap = sampleInvoiceSnapshot();
+  snap.reports[0].emp.dailyWage = 2000000;
+  const rep = snap.reports[0].rep;
+  rep.totalDailyWage = 2000000; rep.totalTransportFee = 1000; rep.totalOvertimePay = 0; rep.grandTotal = 2001000;
+  const issue = sampleIssue(snap); issue.subtotal = 2001000; issue.tax = 200100; issue.total = 2201100;
+  legacy.invoiceLog = [issue];
+  assert.doesNotThrow(() => core.validateBackupPayload(legacy));
+
+  const strict = sampleBackup(); strict.schemaVersion = 1; strict.invoiceLog = [issue];
+  assert.throws(() => core.validateBackupPayload(strict), /範囲外/);
+});
+
 test('validateBackupPayload: 発行スナップショットのID不整合と重複日を拒否する', () => {
   const mismatch = sampleBackup();
   const snapMismatch = sampleInvoiceSnapshot();
@@ -356,10 +386,22 @@ test('validateBackupPayload: 発行スナップショットのID不整合と重�
   assert.throws(() => core.validateBackupPayload(mismatch), /従業員IDが一致/);
 
   const duplicate = sampleBackup();
+  duplicate.schemaVersion = 1;
   const snapDuplicate = sampleInvoiceSnapshot();
   snapDuplicate.reports[0].rep.records.push({ ...snapDuplicate.reports[0].rep.records[0], id: 'snap_rec2' });
   duplicate.invoiceLog = [sampleIssue(snapDuplicate)];
   assert.throws(() => core.validateBackupPayload(duplicate), /同じ日の勤怠が重複/);
+});
+
+test('validateBackupPayload: 発行履歴の取引先と請求期間をsnapshotと照合する', () => {
+  const party = sampleBackup();
+  const partyIssue = sampleIssue(sampleInvoiceSnapshot()); partyIssue.clientName = '別会社'; party.invoiceLog = [partyIssue];
+  assert.throws(() => core.validateBackupPayload(party), /取引先または発行者がスナップショットと一致/);
+
+  const period = sampleBackup();
+  const periodSnap = sampleInvoiceSnapshot(); periodSnap.reports[0].rep.records[0].date = '2026-09-01';
+  const periodIssue = sampleIssue(periodSnap); period.invoiceLog = [periodIssue];
+  assert.throws(() => core.validateBackupPayload(period), /請求期間外/);
 });
 
 test('復元処理は検証完了後に1トランザクションで永続化する', () => {
