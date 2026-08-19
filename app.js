@@ -238,6 +238,19 @@ function billingPeriod(year,month,closingDay){
 }
 function calcTax(sub,rate){return Math.floor(sub*(rate/100));}
 
+/** 発行済み履歴を基準に、その年の次の請求番号を決める。
+ * 旧形式（YYYY-MM-xxx）は過去互換として残し、新形式 YYYY-NNNNNN だけを
+ * 連番として数えるため、既存の発行済み番号は一切書き換えない。 */
+function nextInvoiceNumber(log,year){
+  let max=0;
+  (Array.isArray(log)?log:[]).forEach(o=>{
+    const s=o&&typeof o.invoiceNo==='string'?o.invoiceNo:'';
+    const m=s.match(/^(\d{4})-(\d{6})$/);
+    if(m&&Number(m[1])===Number(year))max=Math.max(max,Number(m[2])||0);
+  });
+  return `${year}-${String(max+1).padStart(6,'0')}`;
+}
+
 /** 期間レポート（従業員1人）*/
 function periodReport(emp,start,end){
   // 同一従業員・同一日の重複レコードは1日1件として扱う。
@@ -1404,8 +1417,8 @@ $('pv-print').addEventListener('click',async()=>{
 /* A4 2ページ請求書HTML（ネイビー×白・帳票風）
    cssMode: 'print'(A4原寸) または 'screen'(画面幅フィット) */
 function invoiceNoOf(reports,batch,y,m){
-  return batch?`${y}-${pad2(m)}-ALL`
-    :`${y}-${pad2(m)}-${(reports[0].emp.id).replace(/[^0-9]/g,'').slice(0,3).padStart(3,'0')||'001'}`;
+  // 個別/一括を同じ年次連番に載せ、同じ月の再発行でも番号が衝突しないようにする。
+  return nextInvoiceNumber(STATE.invoiceLog,y);
 }
 /* opt で設定・請求番号・発行日を差し替えられる（発行履歴からの再表示に使う） */
 function buildInvoiceHTML(reports,period,batch,cssMode,opt){

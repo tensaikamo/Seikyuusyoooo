@@ -22,7 +22,7 @@ function loadCore() {
   const prefix = source.slice(0, cut);
   const expose = `\n;globalThis.__core = {
     overtimeRate, safeNum, dailyTotal, recHasData,
-    billingPeriod, calcTax, daysInPeriod,
+    billingPeriod, calcTax, nextInvoiceNumber, daysInPeriod,
     periodReport, idx, invalidateIdx, STATE,
     INPUT_MAX, WAGE_MAX
   };`;
@@ -126,6 +126,20 @@ test('dailyTotal: 手入力合計は自動計算を上書きする', () => {
   assert.equal(total.autoTotal, 14125);
   assert.equal(total.total, 20000);
   assert.equal(total.overridden, true);
+});
+
+test('nextInvoiceNumber: 旧形式を壊さず新形式だけを年次連番にする', () => {
+  assert.equal(core.nextInvoiceNumber([], 2026), '2026-000001');
+  const log = [
+    { invoiceNo: '2026-08-001' },
+    { invoiceNo: '2026-000001' },
+    { invoiceNo: '2025-000099' },
+    { invoiceNo: '2026-000003' },
+    { invoiceNo: '2026-000003-取消' },
+    { invoiceNo: '2026-08-ALL' },
+  ];
+  assert.equal(core.nextInvoiceNumber(log, 2026), '2026-000004');
+  assert.equal(core.nextInvoiceNumber(log, 2027), '2027-000001');
 });
 
 test('calcTax: 請求書単位の税計算は切り捨て1回', () => {
