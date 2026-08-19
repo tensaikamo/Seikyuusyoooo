@@ -37,7 +37,7 @@ let STATE={
   employees:[],      // {id,name,dailyWage,nightWage,createdAt}
   records:[],        // {id,employeeId,date,attendance,overtimeHours,nightAttendance,nightOvertimeHours,transportFee,note}
   settings:JSON.parse(JSON.stringify(DEFAULT_SETTINGS)),
-  invoiceLog:[],     // 発行履歴（電子帳簿保存法）。追記のみ・削除しない
+  invoiceLog:[],     // 発行履歴。新規取消は元記録を変更せず取消レコードを追記（全データ削除/復元は別機能）
   ready:false
 };
 let viewY=new Date().getFullYear(), viewM=new Date().getMonth()+1; // 1-12
@@ -327,18 +327,18 @@ function backupDate(v,label){
   if(dt.getFullYear()!==y||dt.getMonth()+1!==m||dt.getDate()!==d)backupFail(`${label}に存在しない日付があります`);
   return v;
 }
-function normalizeBackupSettings(raw){
+function normalizeBackupSettings(raw,legacy=false){
   const s=raw==null?{}:backupObj(raw,'設定');
   const issuer=s.issuer==null?{}:backupObj(s.issuer,'発行者設定');
   const client=s.client==null?{}:backupObj(s.client,'請求先設定');
   const bank=s.bank==null?{}:backupObj(s.bank,'振込先設定');
   const tax=backupNum(s.taxRate??DEFAULT_SETTINGS.taxRate,'消費税率',0,100);
-  if(![0,8,10].includes(tax))backupFail('消費税率は 0・8・10% のいずれかにしてください');
+  if(!legacy&&![0,8,10].includes(tax))backupFail('消費税率は 0・8・10% のいずれかにしてください');
   return {
-    defaultTransportFee:backupNum(s.defaultTransportFee??DEFAULT_SETTINGS.defaultTransportFee,'車代の初期値',0,INPUT_MAX.transportFee),
+    defaultTransportFee:backupNum(s.defaultTransportFee??DEFAULT_SETTINGS.defaultTransportFee,'車代の初期値',0,legacy?Number.MAX_SAFE_INTEGER:INPUT_MAX.transportFee),
     taxRate:tax,
     closingDay:backupNum(s.closingDay??DEFAULT_SETTINGS.closingDay,'締め日',1,31,true),
-    monthlyGoal:backupNum(s.monthlyGoal??DEFAULT_SETTINGS.monthlyGoal,'月間目標',0,1000000000000),
+    monthlyGoal:backupNum(s.monthlyGoal??DEFAULT_SETTINGS.monthlyGoal,'月間目標',0,legacy?Number.MAX_SAFE_INTEGER:1000000000000),
     issuer:{
       companyName:backupText(issuer.companyName,'自社名',200),postalCode:backupText(issuer.postalCode,'自社郵便番号',40),
       address:backupText(issuer.address,'自社住所',500),phone:backupText(issuer.phone,'電話番号',100),
@@ -361,7 +361,7 @@ function normalizeBackupSnapshot(raw,index,legacy=false){
   const serialized=JSON.stringify(s);
   if(serialized.length>5000000)backupFail(`発行履歴${index+1}件目のスナップショットが大きすぎます`);
   if(s.reports.length>5000)backupFail(`発行履歴${index+1}件目の明細件数が多すぎます`);
-  const settings=normalizeBackupSettings(s.settings);
+  const settings=normalizeBackupSettings(s.settings,legacy);
   const reports=s.reports.map((rawReport,ri)=>{
     const label=`発行履歴${index+1}件目の明細${ri+1}件目`;
     const item=backupObj(rawReport,label);
@@ -1675,7 +1675,7 @@ $('pv-print').addEventListener('click',async()=>{
     toast('発行履歴は保存済みです。もう一度「保存・印刷」を押してください');
     return;
   }
-  // Safari は文書タイトルをPDFの既定ファイル名に使う。検索要件を満たす名前に一時的に差し替える
+  // Safari は文書タイトルをPDFの既定ファイル名に使う。識別しやすい名前に一時的に差し替える
   const prevTitle=document.title;
   if(pendingIssue)document.title=issueFileName(pendingIssue);
   setTimeout(()=>{

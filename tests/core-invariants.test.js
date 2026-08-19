@@ -364,6 +364,18 @@ test('validateBackupPayload: schemaVersionなしの旧発行snapshotは当時の
   assert.throws(() => core.validateBackupPayload(strict), /集計値が勤怠明細と一致/);
 });
 
+test('validateBackupPayload: 旧発行snapshot内の過去設定値は証跡として保持し、新schemaでは現行上限を適用する', () => {
+  const legacy = sampleBackup();
+  const snap = sampleInvoiceSnapshot();
+  snap.settings.defaultTransportFee = 250000;
+  const issue = sampleIssue(snap);
+  legacy.invoiceLog = [issue];
+  assert.doesNotThrow(() => core.validateBackupPayload(legacy));
+
+  const strict = sampleBackup(); strict.schemaVersion = 1; strict.invoiceLog = [issue];
+  assert.throws(() => core.validateBackupPayload(strict), /車代の初期値.*範囲外/);
+});
+
 test('validateBackupPayload: 旧発行snapshotの過去上限超過値は履歴として保持し、新schemaでは拒否する', () => {
   const legacy = sampleBackup();
   const snap = sampleInvoiceSnapshot();
