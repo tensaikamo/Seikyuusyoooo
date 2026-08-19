@@ -1,9 +1,9 @@
 'use strict';
 /* =============================================================
    日給管理・請求書 — iPhone単一HTML版（依存ゼロ）
-   ネイビー×白 / IndexedDB / A4 2ページPDF
+   ネイビー×白 / IndexedDB / A4印刷・PDF保存
    ============================================================= */
-const APP_VERSION='1.6.4';
+const APP_VERSION='1.7.0';
 
 /* ---------- HTML escape ---------- */
 function esc(s){return String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
@@ -1567,7 +1567,7 @@ $('pv-print').addEventListener('click',async()=>{
   },60);
 });
 
-/* A4 2ページ請求書HTML（ネイビー×白・帳票風）
+/* A4請求書HTML（表紙＋必要枚数の明細 / ネイビー×白・帳票風）
    cssMode: 'print'(A4原寸) または 'screen'(画面幅フィット) */
 function invoiceNoOf(reports,batch,y,m){
   // 個別/一括を同じ年次連番に載せ、同じ月の再発行でも番号が衝突しないようにする。
