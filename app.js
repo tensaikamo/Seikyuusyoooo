@@ -222,8 +222,12 @@ function billingPeriod(year,month,closingDay){
   }else{
     let py=year,pm=month-1; if(pm===0){pm=12;py=year-1;}
     const prevLast=new Date(py,pm,0).getDate();
-    const sd=Math.min(closingDay+1,prevLast);
-    start=new Date(py,pm-1,sd);
+    // 前月の実在する締め日を確定してから、その翌日を開始日にする。
+    // 28日締め + 2月のように closingDay+1 が存在しない月でも、
+    // 前月末日を重複計上せず翌月1日へ正しく繰り上がる。
+    const prevClose=new Date(py,pm-1,Math.min(closingDay,prevLast));
+    start=new Date(prevClose);
+    start.setDate(start.getDate()+1);
     const curLast=new Date(year,month,0).getDate();
     const ed=Math.min(closingDay,curLast);
     end=new Date(year,month-1,ed);
