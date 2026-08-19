@@ -1576,6 +1576,9 @@ function buildInvoiceHTML(reports,period,batch,cssMode,opt){
   const total=subtotal+tax;
 
   const issuer=s.issuer,client=s.client,bank=s.bank;
+  // 画面側の角印は発行時アニメーションで表示する。印刷側にはHTML生成時点で
+  // 同じ印影を埋め込み、プレビューだけに印が出る不一致をなくす。
+  const printSeal=(cssMode==='print'&&issuer.companyName)?`<div class="inv-doc-seal">${buildSeal(issuer.companyName)}</div>`:'';
 
   // ---- 1ページ目 ----
   const empRows=reports.map(r=>{
@@ -1672,6 +1675,7 @@ function buildInvoiceHTML(reports,period,batch,cssMode,opt){
             ${issuer.phone?'TEL：'+esc(issuer.phone)+'<br>':''}
             ${issuer.invoiceNumber?'登録番号：'+esc(issuer.invoiceNumber):''}
           </div>
+          ${printSeal}
         </div>
       </div>
 
@@ -1751,9 +1755,11 @@ const PRINT_CSS=`
 #print-root .inv-parties{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:9mm;}
 #print-root .inv-client-name{font-size:14.5pt;color:#1a2744;border-bottom:1.2pt solid #1a2744;padding-bottom:2.5mm;display:inline-block;min-width:72mm;font-weight:600;}
 #print-root .inv-client-detail{font-size:8.5pt;color:#666;margin-top:2.5mm;line-height:1.7;font-family:'Hiragino Kaku Gothic ProN',sans-serif;}
-#print-root .inv-p1-issuer{text-align:right;font-family:'Hiragino Kaku Gothic ProN',sans-serif;}
+#print-root .inv-p1-issuer{text-align:right;font-family:'Hiragino Kaku Gothic ProN',sans-serif;position:relative;padding-right:24mm;min-height:22mm;}
 #print-root .inv-p1-issuer-name{font-size:11.5pt;color:#1a2744;font-weight:700;}
 #print-root .inv-p1-issuer-detail{font-size:7.5pt;color:#777;line-height:1.7;margin-top:1.5mm;}
+#print-root .inv-doc-seal{position:absolute;right:0;top:-1mm;width:20mm;height:20mm;opacity:.78;mix-blend-mode:multiply;}
+#print-root .inv-doc-seal .seal{display:block;width:100%;height:100%;}
 #print-root .inv-amount-row{display:flex;align-items:baseline;justify-content:space-between;border-top:1.6pt solid #1a2744;border-bottom:0.5pt solid #d8d8d8;padding:5mm 1mm;margin-bottom:8mm;}
 #print-root .inv-total-label{font-size:10.5pt;color:#1a2744;letter-spacing:3px;}
 #print-root .inv-total-amount{font-size:26pt;color:#1a2744;font-weight:600;font-family:'Hiragino Sans','Hiragino Kaku Gothic ProN',sans-serif;letter-spacing:0.5px;}

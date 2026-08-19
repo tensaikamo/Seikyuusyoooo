@@ -313,3 +313,12 @@ test('事務処理規程はアプリを削除不能システムと誤表現し�
   assert.match(body, /本アプリ単体を「訂正削除ができないシステム」と/);
   assert.doesNotMatch(body, /削除できない形で管理される/);
 });
+
+
+test('角印は印刷HTMLにも埋め込まれる', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'app.js'), 'utf8');
+  assert.match(src, /const printSeal=\(cssMode==='print'&&issuer\.companyName\)/);
+  assert.match(src, /\$\{printSeal\}/);
+  assert.match(src, /#print-root \.inv-doc-seal\{/);
+  assert.match(src, /#print-root \.inv-doc-seal \.seal\{/);
+});
