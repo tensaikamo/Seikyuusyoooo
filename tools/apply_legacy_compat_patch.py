@@ -132,6 +132,11 @@ pos=test.rfind(old)
 if pos<0: raise SystemExit('ABORT sample snapshot settings anchor not found')
 test=test[:pos]+new+test[pos+len(old):]
 
+# Existing strict tamper test may now be rejected one layer earlier by the new component-total check.
+old="""  assert.throws(() => core.validateBackupPayload(badAggregate), /集計値が勤怠明細と一致/);\n"""
+new="""  assert.throws(() => core.validateBackupPayload(badAggregate), /(集計値が勤怠明細と一致|内訳合計と合計金額が一致)/);\n"""
+test=once(test,old,new,'aggregate tamper rejection message')
+
 # New-format duplicate snapshot test remains strict.
 old="""  const duplicate = sampleBackup();
   const snapDuplicate = sampleInvoiceSnapshot();
@@ -145,9 +150,7 @@ test=once(test,old,new,'new schema duplicate test')
 # Historical compatibility regression: old calculation semantics and old oversized snapshot values
 # must remain restorable when schemaVersion is absent, but the new schema stays strict.
 anchor="""test('validateBackupPayload: 発行スナップショットのID不整合と重複日を拒否する', () => {\n"""
-block="""test('validateBackupPayload: schemaVersionなしの旧発行snapshotは当時の計算結果を保存したまま復元できる', () => {\n  const legacy = sampleBackup();\n  const snap = sampleInvoiceSnapshot();\n  const rec = snap.reports[0].rep.records[0];\n  rec.attendance = 0; rec.overtimeHours = 2; rec.transportFee = 1000;\n  const rep = snap.reports[0].rep;\n  rep.totalAttendance = 0; rep.totalDailyWage = 0; rep.totalOvertimePay = 3125; rep.totalTransportFee = 1000; rep.grandTotal = 4125;\n  const issue = sampleIssue(snap);\n  issue.subtotal = 4125; issue.tax = 412; issue.total = 4537;\n  legacy.invoiceLog = [issue];\n  assert.doesNotThrow(() => core.validateBackupPayload(legacy));\n\n  const current = structuredClone ? null : null; // marker only; Node VM does not expose structuredClone\n  const strict = sampleBackup(); strict.schemaVersion = 1; strict.invoiceLog = [issue];\n  assert.throws(() => core.validateBackupPayload(strict), /集計値が勤怠明細と一致/);\n});\n\ntest('validateBackupPayload: 旧発行snapshotの過去上限超過値は履歴として保持し、新schemaでは拒否する', () => {\n  const legacy = sampleBackup();\n  const snap = sampleInvoiceSnapshot();\n  snap.reports[0].emp.dailyWage = 2000000;\n  const rep = snap.reports[0].rep;\n  rep.totalDailyWage = 2000000; rep.totalTransportFee = 1000; rep.totalOvertimePay = 0; rep.grandTotal = 2001000;\n  const issue = sampleIssue(snap); issue.subtotal = 2001000; issue.tax = 200100; issue.total = 2201100;\n  legacy.invoiceLog = [issue];\n  assert.doesNotThrow(() => core.validateBackupPayload(legacy));\n\n  const strict = sampleBackup(); strict.schemaVersion = 1; strict.invoiceLog = [issue];\n  assert.throws(() => core.validateBackupPayload(strict), /範囲外/);\n});\n\n"""+anchor
-# Remove an accidental unsupported marker before writing.
-block=block.replace("\n  const current = structuredClone ? null : null; // marker only; Node VM does not expose structuredClone\n", "\n")
+block="""test('validateBackupPayload: schemaVersionなしの旧発行snapshotは当時の計算結果を保存したまま復元できる', () => {\n  const legacy = sampleBackup();\n  const snap = sampleInvoiceSnapshot();\n  const rec = snap.reports[0].rep.records[0];\n  rec.attendance = 0; rec.overtimeHours = 2; rec.transportFee = 1000;\n  const rep = snap.reports[0].rep;\n  rep.totalAttendance = 0; rep.totalDailyWage = 0; rep.totalOvertimePay = 3125; rep.totalTransportFee = 1000; rep.grandTotal = 4125;\n  const issue = sampleIssue(snap);\n  issue.subtotal = 4125; issue.tax = 412; issue.total = 4537;\n  legacy.invoiceLog = [issue];\n  assert.doesNotThrow(() => core.validateBackupPayload(legacy));\n\n  const strict = sampleBackup(); strict.schemaVersion = 1; strict.invoiceLog = [issue];\n  assert.throws(() => core.validateBackupPayload(strict), /集計値が勤怠明細と一致/);\n});\n\ntest('validateBackupPayload: 旧発行snapshotの過去上限超過値は履歴として保持し、新schemaでは拒否する', () => {\n  const legacy = sampleBackup();\n  const snap = sampleInvoiceSnapshot();\n  snap.reports[0].emp.dailyWage = 2000000;\n  const rep = snap.reports[0].rep;\n  rep.totalDailyWage = 2000000; rep.totalTransportFee = 1000; rep.totalOvertimePay = 0; rep.grandTotal = 2001000;\n  const issue = sampleIssue(snap); issue.subtotal = 2001000; issue.tax = 200100; issue.total = 2201100;\n  legacy.invoiceLog = [issue];\n  assert.doesNotThrow(() => core.validateBackupPayload(legacy));\n\n  const strict = sampleBackup(); strict.schemaVersion = 1; strict.invoiceLog = [issue];\n  assert.throws(() => core.validateBackupPayload(strict), /範囲外/);\n});\n\n"""+anchor
 test=once(test,anchor,block,'legacy compatibility tests')
 
 # Party / period tamper checks.
