@@ -355,6 +355,70 @@ function normalizeBackupSettings(raw){
     }
   };
 }
+function normalizeBackupSnapshot(raw,index){
+  const s=backupObj(raw,`発行履歴${index+1}件目のスナップショット`);
+  if(!s.settings||!Array.isArray(s.reports))backupFail(`発行履歴${index+1}件目のスナップショット形式が不正です`);
+  const serialized=JSON.stringify(s);
+  if(serialized.length>5000000)backupFail(`発行履歴${index+1}件目のスナップショットが大きすぎます`);
+  if(s.reports.length>5000)backupFail(`発行履歴${index+1}件目の明細件数が多すぎます`);
+  const settings=normalizeBackupSettings(s.settings);
+  const reports=s.reports.map((rawReport,ri)=>{
+    const label=`発行履歴${index+1}件目の明細${ri+1}件目`;
+    const item=backupObj(rawReport,label);
+    const er=backupObj(item.emp,`${label}の従業員`);
+    const empId=backupId(er.id,`${label}の従業員`);
+    const empName=backupText(er.name,`${label}の従業員名`,200);
+    if(!empName.trim())backupFail(`${label}の従業員名が空です`);
+    const emp={
+      id:empId,name:empName,
+      dailyWage:backupNum(er.dailyWage,`${label}の日給`,1,WAGE_MAX),
+      nightWage:backupNum(er.nightWage??0,`${label}の夜間単価`,0,WAGE_MAX),
+      createdAt:backupText(er.createdAt,`${label}の従業員作成日時`,100)
+    };
+    const rr=backupObj(item.rep,`${label}の集計`);
+    const reportEmployeeId=backupId(rr.employeeId,`${label}の集計従業員`);
+    if(reportEmployeeId!==empId)backupFail(`${label}の従業員IDが一致しません`);
+    if(!Array.isArray(rr.records))backupFail(`${label}の勤怠明細形式が不正です`);
+    if(rr.records.length>1000)backupFail(`${label}の勤怠明細件数が多すぎます`);
+    const ids=new Set(),dates=new Set();
+    const records=rr.records.map((rawRec,rj)=>{
+      const recLabel=`${label}の勤怠${rj+1}件目`;
+      const r=backupObj(rawRec,recLabel);
+      const id=backupId(r.id,recLabel),employeeId=backupId(r.employeeId,`${recLabel}の従業員`);
+      if(employeeId!==empId)backupFail(`${recLabel}の従業員IDが一致しません`);
+      if(ids.has(id))backupFail(`${label}の勤怠IDが重複しています: ${id}`);ids.add(id);
+      const date=backupDate(r.date,recLabel);
+      if(dates.has(date))backupFail(`${label}で同じ日の勤怠が重複しています: ${date}`);dates.add(date);
+      const rec={
+        id,employeeId,date,
+        attendance:backupNum(r.attendance??0,`${recLabel}の出勤数`,0,INPUT_MAX.attendance),
+        overtimeHours:backupNum(r.overtimeHours??0,`${recLabel}の残業時間`,0,INPUT_MAX.overtimeHours),
+        nightAttendance:backupNum(r.nightAttendance??0,`${recLabel}の夜勤出勤数`,0,INPUT_MAX.nightAttendance),
+        nightOvertimeHours:backupNum(r.nightOvertimeHours??0,`${recLabel}の夜間残業`,0,INPUT_MAX.nightOvertimeHours),
+        transportFee:backupNum(r.transportFee??0,`${recLabel}の車代`,0,INPUT_MAX.transportFee)
+      };
+      if(r.manualTotal!=null)rec.manualTotal=backupNum(r.manualTotal,`${recLabel}の手入力合計`,0,INPUT_MAX.manualTotal);
+      if(r.note!=null)rec.note=backupText(r.note,`${recLabel}のメモ`,2000);
+      return rec;
+    });
+    const money=(v,n)=>backupNum(v??0,`${label}の${n}`,0,1000000000000);
+    const rep={
+      employeeId:reportEmployeeId,
+      totalAttendance:backupNum(rr.totalAttendance??0,`${label}の日勤出勤数`,0,100000),
+      totalNightAttendance:backupNum(rr.totalNightAttendance??0,`${label}の夜勤出勤数`,0,100000),
+      totalDailyWage:money(rr.totalDailyWage,'日勤人工代'),
+      totalOvertimePay:money(rr.totalOvertimePay,'日勤残業代'),
+      totalNightWage:money(rr.totalNightWage,'夜勤人工代'),
+      totalNightOvertimePay:money(rr.totalNightOvertimePay,'夜勤残業代'),
+      totalTransportFee:money(rr.totalTransportFee,'車代'),
+      grandTotal:money(rr.grandTotal,'合計'),
+      records
+    };
+    return {emp,rep};
+  });
+  return {settings,reports};
+}
+
 function normalizeBackupIssue(raw,index){
   const o=backupObj(raw,`発行履歴${index+1}件目`);
   const period=backupObj(o.period,`発行履歴${index+1}件目の期間`);
@@ -364,13 +428,7 @@ function normalizeBackupIssue(raw,index){
   const end=backupDate(period.end,`発行履歴${index+1}件目の終了日`);
   if(start>end)backupFail(`発行履歴${index+1}件目の期間が逆転しています`);
   let snapshot=null;
-  if(o.snapshot!=null){
-    snapshot=backupObj(o.snapshot,`発行履歴${index+1}件目のスナップショット`);
-    if(!snapshot.settings||!Array.isArray(snapshot.reports))backupFail(`発行履歴${index+1}件目のスナップショット形式が不正です`);
-    const serialized=JSON.stringify(snapshot);
-    if(serialized.length>5000000)backupFail(`発行履歴${index+1}件目のスナップショットが大きすぎます`);
-    snapshot=JSON.parse(serialized);
-  }
+  if(o.snapshot!=null)snapshot=normalizeBackupSnapshot(o.snapshot,index);
   return {
     id:backupId(o.id,`発行履歴${index+1}件目`),issuedAt,
     invoiceNo:backupNoMarkup(o.invoiceNo,`発行履歴${index+1}件目の請求番号`,120),
@@ -1440,7 +1498,7 @@ function buildIssue(reports,period,batch){
     snapshot:JSON.parse(JSON.stringify({settings:s,reports}))
   };
 }
-/* 電帳法の検索要件（日付・金額・取引先）を満たすファイル名 */
+/* 保存後に日付・金額・取引先で識別しやすいファイル名 */
 function issueFileName(o){
   const d=(o.issuedAt||'').slice(0,10).replace(/-/g,'')||'00000000';
   const cli=(o.clientName||'取引先').replace(/[\\/:*?"<>|\s]/g,'').slice(0,24);

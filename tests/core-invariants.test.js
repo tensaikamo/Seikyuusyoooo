@@ -23,7 +23,7 @@ function loadCore() {
   const expose = `\n;globalThis.__core = {
     overtimeRate, safeNum, dailyTotal, recHasData, shouldApplyDefaultTransport,
     billingPeriod, calcTax, nextInvoiceNumber, daysInPeriod,
-    periodReport, idx, invalidateIdx, validateBackupPayload, STATE,
+    periodReport, idx, invalidateIdx, validateBackupPayload, normalizeBackupSnapshot, STATE,
     INPUT_MAX, WAGE_MAX
   };`;
 
@@ -266,6 +266,64 @@ test('validateBackupPayload: 入力上限超過と未知の将来schemaを拒否
   assert.throws(() => core.validateBackupPayload(future), /復元できません/);
 });
 
+function sampleInvoiceSnapshot() {
+  return {
+    settings: { defaultTransportFee: 1000, taxRate: 10, closingDay: 31, monthlyGoal: 0, issuer: {}, client: {}, bank: {} },
+    reports: [{
+      emp: { id: 'snap_emp', name: 'A', dailyWage: 10000, nightWage: 0, createdAt: '2026-08-01T00:00:00.000Z' },
+      rep: {
+        employeeId: 'snap_emp', totalAttendance: 1, totalNightAttendance: 0,
+        totalDailyWage: 10000, totalOvertimePay: 0, totalNightWage: 0,
+        totalNightOvertimePay: 0, totalTransportFee: 1000, grandTotal: 11000,
+        records: [{ id: 'snap_rec', employeeId: 'snap_emp', date: '2026-08-01', attendance: 1, overtimeHours: 0, nightAttendance: 0, nightOvertimeHours: 0, transportFee: 1000 }]
+      }
+    }]
+  };
+}
+
+function sampleIssue(snapshot) {
+  return {
+    id: 'issue1', issuedAt: '2026-08-02T00:00:00.000Z', invoiceNo: '2026-000001', issueDate: '2026年8月2日',
+    period: { start: '2026-08-01', end: '2026-08-31', label: '2026年8月1日〜2026年8月31日', periodLabel: '2026年8月分' },
+    clientName: '取引先', issuerName: '発行者', subtotal: 11000, tax: 1100, taxRate: 10, total: 12100,
+    batch: false, voided: false, voidReason: '', snapshot
+  };
+}
+
+test('validateBackupPayload: 発行スナップショット内部も数値型まで検証・正規化する', () => {
+  const good = sampleBackup();
+  good.invoiceLog = [sampleIssue(sampleInvoiceSnapshot())];
+  const out = core.validateBackupPayload(good);
+  assert.equal(out.invoiceLog[0].snapshot.settings.taxRate, 10);
+  assert.equal(out.invoiceLog[0].snapshot.reports[0].rep.totalAttendance, 1);
+
+  const badTax = sampleBackup();
+  const snapTax = sampleInvoiceSnapshot();
+  snapTax.settings.taxRate = '<img src=x onerror=alert(1)>';
+  badTax.invoiceLog = [sampleIssue(snapTax)];
+  assert.throws(() => core.validateBackupPayload(badTax), /数値が範囲外/);
+
+  const badReport = sampleBackup();
+  const snapReport = sampleInvoiceSnapshot();
+  snapReport.reports[0].rep.totalAttendance = '<svg onload=alert(1)>';
+  badReport.invoiceLog = [sampleIssue(snapReport)];
+  assert.throws(() => core.validateBackupPayload(badReport), /数値が範囲外/);
+});
+
+test('validateBackupPayload: 発行スナップショットのID不整合と重複日を拒否する', () => {
+  const mismatch = sampleBackup();
+  const snapMismatch = sampleInvoiceSnapshot();
+  snapMismatch.reports[0].rep.employeeId = 'other_emp';
+  mismatch.invoiceLog = [sampleIssue(snapMismatch)];
+  assert.throws(() => core.validateBackupPayload(mismatch), /従業員IDが一致/);
+
+  const duplicate = sampleBackup();
+  const snapDuplicate = sampleInvoiceSnapshot();
+  snapDuplicate.reports[0].rep.records.push({ ...snapDuplicate.reports[0].rep.records[0], id: 'snap_rec2' });
+  duplicate.invoiceLog = [sampleIssue(snapDuplicate)];
+  assert.throws(() => core.validateBackupPayload(duplicate), /同じ日の勤怠が重複/);
+});
+
 test('復元処理は検証完了後に1トランザクションで永続化する', () => {
   const src = fs.readFileSync(path.join(__dirname, '..', 'app.js'), 'utf8');
   const start = src.indexOf("$('import-btn').addEventListener('click',()=>{");
@@ -348,4 +406,11 @@ test('リリース表記は実際の印刷/PDF保存方式と一致する', () =
   assert.equal(manifest.description.includes('A4 2ページPDF'), false);
   assert.match(html, /まとめ請求書を保存・印刷/);
   assert.match(sw, /const CACHE='invoice-v16';/);
+});
+
+
+test('Service Workerのactivateは当アプリの旧cacheだけを削除する', () => {
+  const sw = fs.readFileSync(path.join(__dirname, '..', 'sw.js'), 'utf8');
+  assert.match(sw, /filter\(k=>k\.startsWith\('invoice-'\)&&k!==CACHE\)/);
+  assert.doesNotMatch(sw, /filter\(k=>k!==CACHE\)/);
 });
