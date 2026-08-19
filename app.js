@@ -3,7 +3,7 @@
    日給管理・請求書 — iPhone単一HTML版（依存ゼロ）
    ネイビー×白 / IndexedDB / A4 2ページPDF
    ============================================================= */
-const APP_VERSION='1.6.2';
+const APP_VERSION='1.6.3';
 
 /* ---------- HTML escape ---------- */
 function esc(s){return String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
@@ -1004,11 +1004,22 @@ function setAtt(date,field,value){
   const max=INPUT_MAX[field];
   if(max!=null&&v>max){v=max;toast(`⚠️ ${INPUT_LABEL[field]||'値'}は ${max.toLocaleString('ja-JP')} までです`);}
   let rec=STATE.records.find(r=>r.employeeId===selEmp&&r.date===date);
+  const isNew=!rec;
   if(!rec){rec={id:uid(),employeeId:selEmp,date,attendance:0,overtimeHours:0,nightAttendance:0,nightOvertimeHours:0,transportFee:0};STATE.records.push(rec);}
   rec[field]=v;
+  // 設定の「車代の初期値」は保存されるだけで使われていなかった。
+  // その日を初めて出勤にしたときだけ自動で入れる（既存の入力は上書きしない）
+  if(isNew&&v>0&&(field==='attendance'||field==='nightAttendance')){
+    const def=safeNum(STATE.settings.defaultTransportFee,INPUT_MAX.transportFee);
+    if(def>0)rec.transportFee=def;
+  }
   // 「休」にしたら、その区分の残業も一緒に消す（残ったまま課金されるのを防ぐ）
   if(field==='attendance'&&v===0)rec.overtimeHours=0;
   if(field==='nightAttendance'&&v===0)rec.nightOvertimeHours=0;
+  // 日勤も夜勤も休なら車代も外す（出勤していない日に車代はつかない）。
+  // 車代だけの日が必要なときは、車代の欄に直接入れれば残る。
+  if((field==='attendance'||field==='nightAttendance')&&
+     (rec.attendance||0)===0&&(rec.nightAttendance||0)===0)rec.transportFee=0;
   if(field==='manualTotal'&&v===0)manualExpanded.delete(xk(date));
   saveRecords();
   haptic();
@@ -1633,15 +1644,29 @@ const SCREEN_CSS=`
 /* ===== 設定タブ ===== */
 function buildClosingOptions(){
   const sel=$('set-closing');sel.innerHTML='';
+  // 29日・30日は月によって存在しないため「月末締め」に寄せる（billingPeriod も29以上を月末扱い）
   for(let d=1;d<=28;d++){const o=document.createElement('option');o.value=d;o.textContent=d+'日締め';sel.appendChild(o);}
-  const o=document.createElement('option');o.value=31;o.textContent='月末締め';sel.appendChild(o);
+  const o=document.createElement('option');o.value=31;o.textContent='月末締め（29日・30日もこちら）';sel.appendChild(o);
+}
+/* 選んだ締め日で今月分がどの期間になるかをその場で見せる */
+function updateClosingHint(){
+  const el=$('closing-hint');if(!el)return;
+  const n=new Date(),y=n.getFullYear(),m=n.getMonth()+1;
+  const per=billingPeriod(y,m,STATE.settings.closingDay);
+  const md=d=>`${+d.slice(5,7)}/${+d.slice(8,10)}`;
+  el.textContent=`${m}月分＝${md(per.start)}〜${md(per.end)}（${daysInPeriod(per.start,per.end).length}日間）`;
 }
 function loadSettingsForm(){
   const s=STATE.settings;
   $('iss-name').value=s.issuer.companyName;$('iss-zip').value=s.issuer.postalCode;$('iss-tel').value=s.issuer.phone;$('iss-addr').value=s.issuer.address;$('iss-invno').value=s.issuer.invoiceNumber;
   $('cli-name').value=s.client.companyName;$('cli-zip').value=s.client.postalCode;$('cli-contact').value=s.client.contactName;$('cli-addr').value=s.client.address;
   $('bk-bank').value=s.bank.bankName;$('bk-branch').value=s.bank.branchName;$('bk-type').value=s.bank.accountType;$('bk-num').value=s.bank.accountNumber;$('bk-holder').value=s.bank.accountHolder;
-  $('set-tax').value=String(s.taxRate);$('set-closing').value=String(s.closingDay);$('set-transport').value=s.defaultTransportFee;$('set-goal').value=s.monthlyGoal||'';
+  $('set-tax').value=String(s.taxRate);
+  // 保存値が選択肢に無い場合（29/30など）は月末締めに寄せて表示のズレを防ぐ
+  const cd=String(s.closingDay);
+  $('set-closing').value=[...$('set-closing').options].some(o=>o.value===cd)?cd:'31';
+  $('set-transport').value=s.defaultTransportFee;$('set-goal').value=s.monthlyGoal||'';
+  updateClosingHint();
 }
 function bindSettings(){
   const m=[
@@ -1654,7 +1679,7 @@ function bindSettings(){
     ['bk-type',v=>STATE.settings.bank.accountType=v],['bk-num',v=>STATE.settings.bank.accountNumber=v],
     ['bk-holder',v=>STATE.settings.bank.accountHolder=v],
     ['set-tax',v=>STATE.settings.taxRate=parseInt(v,10)||0],
-    ['set-closing',v=>STATE.settings.closingDay=parseInt(v,10)||31],
+    ['set-closing',v=>{STATE.settings.closingDay=parseInt(v,10)||31;updateClosingHint();}],
     ['set-transport',v=>STATE.settings.defaultTransportFee=parseInt(v,10)||0],
     ['set-goal',v=>STATE.settings.monthlyGoal=parseInt(v,10)||0],
   ];
@@ -1664,6 +1689,7 @@ function bindSettings(){
   });
 }
 function renderSettingsLists(){
+  renderDataHealth();
   renderInvoiceLog();
   const list=$('set-emp-list');list.innerHTML='';
   if(!STATE.employees.length){list.innerHTML='<div style="font-size:.82rem;color:var(--mut);padding:4px 0;">従業員が登録されていません</div>';return;}
@@ -1674,6 +1700,48 @@ function renderSettingsLists(){
   });
 }
 $('set-add-emp').addEventListener('click',()=>openEmpModal(null));
+
+/* ---------- データの健全性チェック ----------
+   入力の上限を付ける前に保存された異常値（桁の打ち間違いなど）を洗い出して知らせる。
+   計算側では safeNum で丸めているが、元データが直らないと請求額が合わないため。 */
+function dataIssues(){
+  const out=[];
+  STATE.employees.forEach(e=>{
+    if(safeNum(e.dailyWage)>WAGE_MAX)out.push({who:e.name,what:'日給',val:e.dailyWage,max:WAGE_MAX});
+    if(safeNum(e.nightWage)>WAGE_MAX)out.push({who:e.name,what:'夜間単価',val:e.nightWage,max:WAGE_MAX});
+  });
+  const {empById}=idx();
+  const cnt={};
+  STATE.records.forEach(r=>{
+    const emp=empById.get(r.employeeId);
+    const nm=emp?emp.name:'（削除済みの従業員）';
+    const chk=(k,label,max)=>{
+      const v=Number(r[k]);
+      if(Number.isFinite(v)&&v>max){const key=nm+'|'+label;cnt[key]=(cnt[key]||0)+1;}
+    };
+    chk('transportFee','車代',INPUT_MAX.transportFee);
+    chk('overtimeHours','残業時間',INPUT_MAX.overtimeHours);
+    chk('nightOvertimeHours','夜間残業',INPUT_MAX.nightOvertimeHours);
+    chk('manualTotal','手入力の合計',INPUT_MAX.manualTotal);
+    if(!emp)cnt[nm+'|所属なし']=(cnt[nm+'|所属なし']||0)+1;
+  });
+  Object.entries(cnt).forEach(([k,n])=>{
+    const [who,what]=k.split('|');out.push({who,what,days:n});
+  });
+  return out;
+}
+function renderDataHealth(){
+  const box=$('data-health');if(!box)return;
+  const iss=dataIssues();
+  if(!iss.length){box.innerHTML='';box.style.display='none';return;}
+  box.style.display='block';
+  box.innerHTML=`<div class="warn-card"><b>入力値に異常があります</b><br>
+    ${iss.map(i=>i.days
+      ? `${esc(i.who)} の「${esc(i.what)}」が上限を超えた日が ${i.days} 日あります`
+      : `${esc(i.who)} の「${esc(i.what)}」が ${yen(i.val)}（上限 ${yen(i.max)}）です`).join('<br>')}
+    <br>桁の打ち間違いの可能性があります。金額は安全な値に丸めて計算していますが、
+    正しい値に直してください。</div>`;
+}
 
 /* ---------- 発行履歴（電子帳簿保存法）---------- */
 function renderInvoiceLog(){

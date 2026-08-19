@@ -402,6 +402,7 @@ i.dot-night{background:var(--night);}
 .edititem .ei-name{flex:1;font-size:var(--fs-md);font-weight:700;}
 .edititem .ei-wage{font-size:var(--fs-sm);color:var(--sub);}
 .edititem button{min-width:32px;min-height:32px;background:none;border:none;color:var(--mut);cursor:pointer;font-size:.95rem;}
+.closing-hint{font-size:var(--fs-xs);color:var(--sub);margin-top:6px;line-height:1.5;}
 .data-btns{display:flex;flex-direction:column;gap:9px;}
 /* ===== 発行履歴（電子帳簿保存法） ===== */
 .ebook-note{font-size:var(--fs-xs);color:var(--sub);line-height:1.7;background:#f4f7fc;border-left:3px solid var(--chart-blue);border-radius:0 8px 8px 0;padding:9px 11px;margin-bottom:11px;text-wrap:pretty;}
@@ -615,11 +616,12 @@ i.dot-night{background:var(--night);}
         <div class="card-t">請求条件</div>
         <div class="grid2 field">
           <div><label class="fl">消費税率</label><select id="set-tax"><option value="10">10%</option><option value="8">8%</option><option value="0">なし（0%）</option></select></div>
-          <div><label class="fl">締め日</label><select id="set-closing"></select></div>
+          <div><label class="fl">締め日</label><select id="set-closing"></select><div class="closing-hint" id="closing-hint"></div></div>
         </div>
         <div class="field"><label class="fl">車代の初期値（円）</label><input type="number" id="set-transport" inputmode="numeric" min="0" max="100000" step="1" placeholder="1000"></div>
         <div class="field"><label class="fl">月間の売上目標（円）<span style="color:var(--mut);font-weight:400;">／空欄なら直近3ヶ月の平均</span></label><input type="number" id="set-goal" inputmode="numeric" placeholder="例：500000"></div>
       </div>
+      <div id="data-health" style="display:none;"></div>
       <!-- 発行履歴（電子帳簿保存法） -->
       <div class="card">
         <div class="card-t">請求書の発行履歴</div>
