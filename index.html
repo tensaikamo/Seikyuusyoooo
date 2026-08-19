@@ -255,12 +255,20 @@ select{background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/
 .shift-label.night{color:#7c5cff;}
 .att-b.night.sel{background:linear-gradient(150deg in oklab,#6a55dd,#4a37ad);box-shadow:0 3px 9px rgba(91,70,201,.35);}
 .night-sec{margin-top:8px;padding-top:8px;border-top:1px dashed var(--line-2);}
+.warn-strip{margin-top:9px;padding:8px 10px;border-radius:9px;background:#fff6e6;
+  border-left:3px solid var(--amber-d);color:#7a5200;font-size:var(--fs-xs);line-height:1.6;text-wrap:pretty;}
+.warn-strip b{font-weight:800;}
+.warn-card{margin-bottom:12px;padding:12px 14px;border-radius:var(--r);background:#fff6e6;
+  border:1px solid rgba(217,126,6,.3);border-left:4px solid var(--amber-d);color:#7a5200;
+  font-size:var(--fs-sm);line-height:1.7;text-wrap:pretty;}
+.warn-card b{font-weight:800;}
 .night-add{margin-top:7px;background:#f1effb;border:1px dashed #b9aef0;color:var(--night);border-radius:9px;min-height:34px;font-size:var(--fs-sm);font-weight:700;cursor:pointer;padding:0 12px;width:100%;transition:transform var(--dur-1) var(--snap);}
 .night-add:active{background:#e8e3fa;transform:scale(.97);}
 .bulk-row{display:flex;gap:8px;margin-top:11px;padding-top:11px;border-top:1px solid var(--line);}
 .bulk-b{flex:1;min-height:38px;background:#f2f4f9;border:1px solid var(--line-2);border-radius:10px;font-size:var(--fs-sm);font-weight:700;color:var(--sub);cursor:pointer;transition:transform var(--dur-1) var(--snap);}
 .bulk-b:active{transform:scale(.96);}
 .bulk-b.danger{color:var(--danger);border-color:rgba(220,38,38,.3);background:transparent;}
+.run-note{font-size:.68rem;color:rgba(255,255,255,.75);margin-top:3px;line-height:1.4;white-space:nowrap;}
 .rcheer{font-size:var(--fs-sm);font-weight:700;color:#ffd9a8;margin-top:2px;}
 .manual-add{margin-top:7px;background:transparent;border:1px dashed var(--line-2);color:var(--mut);border-radius:9px;min-height:32px;font-size:var(--fs-xs);font-weight:700;cursor:pointer;padding:0 12px;width:100%;}
 .manual-add:active{background:#f2f4f9;}

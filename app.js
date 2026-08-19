@@ -3,7 +3,7 @@
    日給管理・請求書 — iPhone単一HTML版（依存ゼロ）
    ネイビー×白 / IndexedDB / A4 2ページPDF
    ============================================================= */
-const APP_VERSION='1.6.0';
+const APP_VERSION='1.6.1';
 
 /* ---------- HTML escape ---------- */
 function esc(s){return String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
@@ -49,6 +49,7 @@ let editEmpId=null;    // モーダル編集対象
    数年分たまると体感で遅くなる。従業員IDでの索引を作って使い回し、保存時に破棄する。 */
 let _idx=null;
 let dashDirty=true;   // データが変わったときだけダッシュボードを作り直す
+let attDirty=false;   // 設定変更などで勤怠タブの再描画が必要か
 function invalidateIdx(){_idx=null;dashDirty=true;}
 function idx(){
   if(_idx)return _idx;
@@ -63,7 +64,7 @@ function idx(){
 
 const saveEmployees=()=>{invalidateIdx();return idbSet('employees',STATE.employees);};
 const saveRecords=()=>{invalidateIdx();return idbSet('records',STATE.records);};
-const saveSettings=()=>{dashDirty=true;return idbSet('settings',STATE.settings);};
+const saveSettings=()=>{dashDirty=true;attDirty=true;return idbSet('settings',STATE.settings);};
 const saveInvoiceLog=()=>idbSet('invoiceLog',STATE.invoiceLog);
 const saveReady=()=>idbSet('ready',STATE.ready);
 
@@ -308,6 +309,7 @@ function applyTab(t){
 }
 /* 重い描画は遷移を始める前に済ませる（2つのスナップショット取得の間で main thread を止めない） */
 function prepareTab(t){
+  if(t==='att'&&attDirty){attDirty=false;renderAtt();}
   if(t==='home')renderDash();
   if(t==='bill')renderBill();
   if(t==='set')renderSettingsLists();
@@ -810,7 +812,11 @@ function dayControlsHTML(ds,rec,emp){
   const has=recHasData(rec);
   const nightEnabled=(emp.nightWage||0)>0;
   const hasNight=(rec.nightAttendance>0||rec.nightOvertimeHours>0);
-  const showNight=nightEnabled&&(hasNight||nightExpanded.has(xk(ds)));
+  // 入力済みの夜勤データは、夜間単価が未設定でも必ず表示する。
+  // 以前は nightEnabled で欄ごと隠していたため、入力した夜勤・夜間残業が
+  // 画面から消えたうえ 0円で計算され、請求金額が過少になっていた。
+  const showNight=hasNight||(nightEnabled&&nightExpanded.has(xk(ds)));
+  const nightNoRate=hasNight&&!nightEnabled;
   const attOpts=[0.5,1,1.5,2];
   return `
         <div class="shift-label">日勤</div>
@@ -831,8 +837,8 @@ function dayControlsHTML(ds,rec,emp){
           </div>
           <div class="att-sub">
             <div class="att-mini"><label>夜残業h</label><input type="number" inputmode="decimal" value="${rec.nightOvertimeHours||''}" placeholder="0" onchange="setAtt('${ds}','nightOvertimeHours',this.value)"></div>
-            <div class="att-mini" style="visibility:hidden;"><label>　</label><input disabled></div>
           </div>
+          ${nightNoRate?`<div class="warn-strip">夜間単価が未設定のため <b>0円</b> で計算されています。「編集」から夜間単価を設定してください</div>`:''}
         </div>`:(nightEnabled?`<button class="night-add" onclick="toggleNight('${ds}')">＋ 夜勤を入力</button>`:'')}
         ${t.overridden||manualExpanded.has(xk(ds))?`
         <div class="manual-sec">
@@ -934,10 +940,15 @@ function renderAtt(){
   }
 
   const cheer=runTotal===0?'今月はこれから':runTotal<100000?'コツコツ積み上げ中':runTotal<300000?'今月もお疲れさま':'おっ、いい月だ';
+  // 締め日が月末以外だと暦月と請求期間がズレる。数字の食い違いに見えるので明示する
+  const bp=billingPeriod(viewY,viewM,STATE.settings.closingDay);
+  const sameAsMonth=bp.start===ymd(viewY,viewM,1)&&bp.end===ymd(viewY,viewM,new Date(viewY,viewM,0).getDate());
+  const fmtMd=d=>`${+d.slice(5,7)}/${+d.slice(8,10)}`;
+  const note=sameAsMonth?'':`<div class="run-note">請求対象は ${fmtMd(bp.start)}〜${fmtMd(bp.end)}</div>`;
   const seed=(lastRunTotal==null)?0:lastRunTotal;
   html+=`<div class="runbar"><i class="mesh"></i><i class="grain"></i>
     <div class="hero-body" style="display:flex;align-items:center;justify-content:space-between;width:100%;">
-    <div><div class="rl">${viewY}年${viewM}月 合計（暦月）</div><div class="rcheer">${cheer}</div></div>
+    <div><div class="rl">${viewY}年${viewM}月 合計（暦月 1日〜末日）</div><div class="rcheer">${cheer}</div>${note}</div>
     <span class="rv" id="run-v">${yenHTML(seed)}</span></div></div>`;
   body.innerHTML=html;
   animateYen($('run-v'),runTotal);
@@ -1128,6 +1139,14 @@ function renderBill(){
   const reports=STATE.employees.map(e=>({emp:e,rep:periodReport(e,period.start,period.end)}))
     .filter(x=>x.rep.grandTotal>0);
 
+  // 夜勤データがあるのに夜間単価が未設定の従業員（0円で計算され請求が過少になる）
+  const nightNoRate=STATE.employees.filter(e=>{
+    if((e.nightWage||0)>0)return false;
+    return (idx().byEmp.get(e.id)||[]).some(r=>
+      r.date>=period.start&&r.date<=period.end&&
+      ((r.nightAttendance||0)>0||(r.nightOvertimeHours||0)>0));
+  });
+
   let subtotal=0; reports.forEach(x=>subtotal+=x.rep.grandTotal);
   const tax=calcTax(subtotal,s.taxRate);
   const total=subtotal+tax;
@@ -1142,8 +1161,15 @@ function renderBill(){
   $('grand-sub').textContent=reports.length?`税抜 ${yen(subtotal)} ＋ 消費税 ${yen(tax)}（${reports.length}名）`:'この期間のデータがありません';
 
   const list=$('sum-list');list.innerHTML='';
+  if(nightNoRate.length){
+    const w=document.createElement('div');w.className='warn-card';
+    w.innerHTML=`<b>夜間単価が未設定です</b><br>${nightNoRate.map(e=>esc(e.name)).join('・')} は
+      この期間に夜勤の入力がありますが、夜間単価が未設定のため <b>0円</b> で計算されています。
+      このまま発行すると請求額が実際より少なくなります。設定タブの従業員編集から夜間単価を入れてください。`;
+    list.appendChild(w);
+  }
   if(!reports.length){
-    list.innerHTML=`<div class="empty">${ART.bill}<b>この期間のデータがありません</b><br>「勤怠」タブで出勤を入力してください</div>`;
+    list.insertAdjacentHTML('beforeend',`<div class="empty">${ART.bill}<b>この期間のデータがありません</b><br>「勤怠」タブで出勤を入力してください</div>`);
     $('batch-pdf-btn').style.display='none';
     return;
   }
