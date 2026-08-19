@@ -1,9 +1,6 @@
 name: Core regression tests
 
 on:
-  push:
-    branches:
-      - agent/invoice-hardening-phase0
   pull_request:
     branches:
       - main
@@ -16,16 +13,16 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - name: Checkout
+      - name: Checkout feature branch
         uses: actions/checkout@v4
         with:
+          ref: agent/invoice-hardening-phase0
           fetch-depth: 0
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
           node-version: '20'
       - name: Apply staged legacy compatibility patch when present
-        if: github.event_name == 'push'
         run: |
           if [ -f tools/apply_legacy_compat_patch.py ]; then
             python3 tools/apply_legacy_compat_patch.py
@@ -38,7 +35,7 @@ jobs:
       - name: Run regression and invariant tests
         run: node --test tests/*.test.js
       - name: Commit verified compatibility patch and restore normal CI
-        if: github.event_name == 'push' && env.LEGACY_PATCH_APPLIED == '1'
+        if: env.LEGACY_PATCH_APPLIED == '1'
         run: |
           git config user.name "invoice-hardening-bot"
           git config user.email "invoice-hardening-bot@users.noreply.github.com"
