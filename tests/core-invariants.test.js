@@ -262,6 +262,7 @@ test('validateBackupPayload: 存在しない従業員参照と危険なIDを拒�
 
 test('validateBackupPayload: 入力上限超過と未知の将来schemaを拒否する', () => {
   const high = sampleBackup();
+  high.schemaVersion = 1;
   high.records[0].transportFee = 100001;
   assert.throws(() => core.validateBackupPayload(high), /範囲外/);
   const future = sampleBackup();
@@ -292,6 +293,28 @@ function sampleIssue(snapshot) {
     batch: false, voided: false, voidReason: '', snapshot
   };
 }
+
+test('validateBackupPayload: schemaVersionなしの旧ライブデータは上限導入前のraw値を保持できる', () => {
+  const legacy = sampleBackup();
+  legacy.employees[0].dailyWage = 2000000;
+  legacy.records[0].overtimeHours = 100;
+  legacy.records[0].nightOvertimeHours = 100;
+  legacy.records[0].transportFee = 1000000;
+  legacy.records[0].manualTotal = 50000000;
+  const out = core.validateBackupPayload(legacy);
+  assert.equal(out.employees[0].dailyWage, 2000000);
+  assert.equal(out.records[0].overtimeHours, 100);
+  assert.equal(out.records[0].transportFee, 1000000);
+  assert.equal(out.records[0].manualTotal, 50000000);
+
+  const strict = sampleBackup();
+  strict.schemaVersion = 1;
+  strict.employees[0].dailyWage = 2000000;
+  strict.records[0].overtimeHours = 100;
+  strict.records[0].transportFee = 1000000;
+  strict.records[0].manualTotal = 50000000;
+  assert.throws(() => core.validateBackupPayload(strict), /範囲外/);
+});
 
 test('validateBackupPayload: 発行スナップショット内部も数値型まで検証・正規化する', () => {
   const good = sampleBackup();

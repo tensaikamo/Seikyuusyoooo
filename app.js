@@ -498,6 +498,8 @@ function validateBackupPayload(raw){
   const invoiceRaw=o.invoiceLog==null?[]:o.invoiceLog;
   if(!Array.isArray(invoiceRaw))backupFail('発行履歴の形式が不正です');
   if(o.employees.length>5000||o.records.length>500000||invoiceRaw.length>100000)backupFail('バックアップの件数が上限を超えています');
+  const legacyBackup=o.schemaVersion==null;
+  const legacyMoneyMax=1000000000000,legacyHoursMax=100000;
 
   const empIds=new Set();
   const employees=o.employees.map((rawEmp,i)=>{
@@ -505,7 +507,10 @@ function validateBackupPayload(raw){
     if(empIds.has(id))backupFail(`従業員IDが重複しています: ${id}`);empIds.add(id);
     const name=backupText(e.name,`従業員${i+1}件目の名前`,200);
     if(!name.trim())backupFail(`従業員${i+1}件目の名前が空です`);
-    return {id,name,dailyWage:backupNum(e.dailyWage,`${name}の日給`,1,WAGE_MAX),nightWage:backupNum(e.nightWage??0,`${name}の夜間単価`,0,WAGE_MAX),createdAt:backupText(e.createdAt,`${name}の作成日時`,100)};
+    return {id,name,
+      dailyWage:backupNum(e.dailyWage,`${name}の日給`,1,legacyBackup?legacyMoneyMax:WAGE_MAX),
+      nightWage:backupNum(e.nightWage??0,`${name}の夜間単価`,0,legacyBackup?legacyMoneyMax:WAGE_MAX),
+      createdAt:backupText(e.createdAt,`${name}の作成日時`,100)};
   });
 
   const recordIds=new Set(),dayKeys=new Set();
@@ -517,16 +522,15 @@ function validateBackupPayload(raw){
     if(dayKeys.has(dayKey))backupFail(`同じ従業員・同じ日の勤怠が重複しています: ${date}`);dayKeys.add(dayKey);
     const rec={id,employeeId,date,
       attendance:backupNum(r.attendance??0,`勤怠${i+1}件目の出勤数`,0,INPUT_MAX.attendance),
-      overtimeHours:backupNum(r.overtimeHours??0,`勤怠${i+1}件目の残業時間`,0,INPUT_MAX.overtimeHours),
+      overtimeHours:backupNum(r.overtimeHours??0,`勤怠${i+1}件目の残業時間`,0,legacyBackup?legacyHoursMax:INPUT_MAX.overtimeHours),
       nightAttendance:backupNum(r.nightAttendance??0,`勤怠${i+1}件目の夜勤出勤数`,0,INPUT_MAX.nightAttendance),
-      nightOvertimeHours:backupNum(r.nightOvertimeHours??0,`勤怠${i+1}件目の夜間残業`,0,INPUT_MAX.nightOvertimeHours),
-      transportFee:backupNum(r.transportFee??0,`勤怠${i+1}件目の車代`,0,INPUT_MAX.transportFee)};
-    if(r.manualTotal!=null)rec.manualTotal=backupNum(r.manualTotal,`勤怠${i+1}件目の手入力合計`,0,INPUT_MAX.manualTotal);
+      nightOvertimeHours:backupNum(r.nightOvertimeHours??0,`勤怠${i+1}件目の夜間残業`,0,legacyBackup?legacyHoursMax:INPUT_MAX.nightOvertimeHours),
+      transportFee:backupNum(r.transportFee??0,`勤怠${i+1}件目の車代`,0,legacyBackup?legacyMoneyMax:INPUT_MAX.transportFee)};
+    if(r.manualTotal!=null)rec.manualTotal=backupNum(r.manualTotal,`勤怠${i+1}件目の手入力合計`,0,legacyBackup?legacyMoneyMax:INPUT_MAX.manualTotal);
     if(r.note!=null)rec.note=backupText(r.note,`勤怠${i+1}件目のメモ`,2000);
     return rec;
   });
 
-  const legacyBackup=o.schemaVersion==null;
   const logIds=new Set();
   const invoiceLog=invoiceRaw.map((x,i)=>{
     const issue=normalizeBackupIssue(x,i,legacyBackup);
