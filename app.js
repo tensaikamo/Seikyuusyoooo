@@ -355,7 +355,7 @@ function normalizeBackupSettings(raw){
     }
   };
 }
-function normalizeBackupSnapshot(raw,index){
+function normalizeBackupSnapshot(raw,index,legacy=false){
   const s=backupObj(raw,`発行履歴${index+1}件目のスナップショット`);
   if(!s.settings||!Array.isArray(s.reports))backupFail(`発行履歴${index+1}件目のスナップショット形式が不正です`);
   const serialized=JSON.stringify(s);
@@ -371,8 +371,8 @@ function normalizeBackupSnapshot(raw,index){
     if(!empName.trim())backupFail(`${label}の従業員名が空です`);
     const emp={
       id:empId,name:empName,
-      dailyWage:backupNum(er.dailyWage,`${label}の日給`,1,WAGE_MAX),
-      nightWage:backupNum(er.nightWage??0,`${label}の夜間単価`,0,WAGE_MAX),
+      dailyWage:backupNum(er.dailyWage,`${label}の日給`,legacy?0:1,legacy?1000000000000:WAGE_MAX),
+      nightWage:backupNum(er.nightWage??0,`${label}の夜間単価`,0,legacy?1000000000000:WAGE_MAX),
       createdAt:backupText(er.createdAt,`${label}の従業員作成日時`,100)
     };
     const rr=backupObj(item.rep,`${label}の集計`);
@@ -386,18 +386,19 @@ function normalizeBackupSnapshot(raw,index){
       const r=backupObj(rawRec,recLabel);
       const id=backupId(r.id,recLabel),employeeId=backupId(r.employeeId,`${recLabel}の従業員`);
       if(employeeId!==empId)backupFail(`${recLabel}の従業員IDが一致しません`);
-      if(ids.has(id))backupFail(`${label}の勤怠IDが重複しています: ${id}`);ids.add(id);
+      if(!legacy&&ids.has(id))backupFail(`${label}の勤怠IDが重複しています: ${id}`);ids.add(id);
       const date=backupDate(r.date,recLabel);
-      if(dates.has(date))backupFail(`${label}で同じ日の勤怠が重複しています: ${date}`);dates.add(date);
+      if(!legacy&&dates.has(date))backupFail(`${label}で同じ日の勤怠が重複しています: ${date}`);dates.add(date);
+      const archivalCountMax=100000,archivalMoneyMax=1000000000000;
       const rec={
         id,employeeId,date,
-        attendance:backupNum(r.attendance??0,`${recLabel}の出勤数`,0,INPUT_MAX.attendance),
-        overtimeHours:backupNum(r.overtimeHours??0,`${recLabel}の残業時間`,0,INPUT_MAX.overtimeHours),
-        nightAttendance:backupNum(r.nightAttendance??0,`${recLabel}の夜勤出勤数`,0,INPUT_MAX.nightAttendance),
-        nightOvertimeHours:backupNum(r.nightOvertimeHours??0,`${recLabel}の夜間残業`,0,INPUT_MAX.nightOvertimeHours),
-        transportFee:backupNum(r.transportFee??0,`${recLabel}の車代`,0,INPUT_MAX.transportFee)
+        attendance:backupNum(r.attendance??0,`${recLabel}の出勤数`,0,legacy?archivalCountMax:INPUT_MAX.attendance),
+        overtimeHours:backupNum(r.overtimeHours??0,`${recLabel}の残業時間`,0,legacy?archivalCountMax:INPUT_MAX.overtimeHours),
+        nightAttendance:backupNum(r.nightAttendance??0,`${recLabel}の夜勤出勤数`,0,legacy?archivalCountMax:INPUT_MAX.nightAttendance),
+        nightOvertimeHours:backupNum(r.nightOvertimeHours??0,`${recLabel}の夜間残業`,0,legacy?archivalCountMax:INPUT_MAX.nightOvertimeHours),
+        transportFee:backupNum(r.transportFee??0,`${recLabel}の車代`,0,legacy?archivalMoneyMax:INPUT_MAX.transportFee)
       };
-      if(r.manualTotal!=null)rec.manualTotal=backupNum(r.manualTotal,`${recLabel}の手入力合計`,0,INPUT_MAX.manualTotal);
+      if(r.manualTotal!=null)rec.manualTotal=backupNum(r.manualTotal,`${recLabel}の手入力合計`,0,legacy?archivalMoneyMax:INPUT_MAX.manualTotal);
       if(r.note!=null)rec.note=backupText(r.note,`${recLabel}のメモ`,2000);
       return rec;
     });
@@ -427,22 +428,26 @@ function normalizeBackupSnapshot(raw,index){
       grandTotal:money(rr.grandTotal,'合計'),
       records
     };
-    const expectedRep={
-      totalAttendance:expectedAttendance,totalNightAttendance:expectedNightAttendance,
-      totalDailyWage:expectedDailyWage,totalOvertimePay:expectedOvertimePay,
-      totalNightWage:expectedNightWage,totalNightOvertimePay:expectedNightOvertimePay,
-      totalTransportFee:expectedTransportFee,
-      grandTotal:expectedDailyWage+expectedOvertimePay+expectedNightWage+expectedNightOvertimePay+expectedTransportFee
-    };
-    Object.entries(expectedRep).forEach(([key,value])=>{
-      if(rep[key]!==value)backupFail(`${label}の集計値が勤怠明細と一致しません (${key})`);
-    });
+    const componentTotal=rep.totalDailyWage+rep.totalOvertimePay+rep.totalNightWage+rep.totalNightOvertimePay+rep.totalTransportFee;
+    if(componentTotal!==rep.grandTotal)backupFail(`${label}の内訳合計と合計金額が一致しません`);
+    if(!legacy){
+      const expectedRep={
+        totalAttendance:expectedAttendance,totalNightAttendance:expectedNightAttendance,
+        totalDailyWage:expectedDailyWage,totalOvertimePay:expectedOvertimePay,
+        totalNightWage:expectedNightWage,totalNightOvertimePay:expectedNightOvertimePay,
+        totalTransportFee:expectedTransportFee,
+        grandTotal:expectedDailyWage+expectedOvertimePay+expectedNightWage+expectedNightOvertimePay+expectedTransportFee
+      };
+      Object.entries(expectedRep).forEach(([key,value])=>{
+        if(rep[key]!==value)backupFail(`${label}の集計値が勤怠明細と一致しません (${key})`);
+      });
+    }
     return {emp,rep};
   });
   return {settings,reports};
 }
 
-function normalizeBackupIssue(raw,index){
+function normalizeBackupIssue(raw,index,legacy=false){
   const o=backupObj(raw,`発行履歴${index+1}件目`);
   const period=backupObj(o.period,`発行履歴${index+1}件目の期間`);
   const issuedAt=backupText(o.issuedAt,`発行履歴${index+1}件目の発行日時`,80);
@@ -451,7 +456,7 @@ function normalizeBackupIssue(raw,index){
   const end=backupDate(period.end,`発行履歴${index+1}件目の終了日`);
   if(start>end)backupFail(`発行履歴${index+1}件目の期間が逆転しています`);
   let snapshot=null;
-  if(o.snapshot!=null)snapshot=normalizeBackupSnapshot(o.snapshot,index);
+  if(o.snapshot!=null)snapshot=normalizeBackupSnapshot(o.snapshot,index,legacy);
   const subtotal=backupNum(o.subtotal,`発行履歴${index+1}件目の小計`,-1000000000000,1000000000000);
   const tax=backupNum(o.tax,`発行履歴${index+1}件目の税額`,-1000000000000,1000000000000);
   const taxRate=backupNum(o.taxRate,`発行履歴${index+1}件目の税率`,0,100);
@@ -462,6 +467,14 @@ function normalizeBackupIssue(raw,index){
     if(taxRate!==snapshot.settings.taxRate)backupFail(`発行履歴${index+1}件目の税率がスナップショットと一致しません`);
     if(tax!==calcTax(subtotal,taxRate))backupFail(`発行履歴${index+1}件目の税額がスナップショットと一致しません`);
     if(total!==subtotal+tax)backupFail(`発行履歴${index+1}件目の合計が小計・税額と一致しません`);
+    const expectedClient=snapshot.settings.client.companyName||'（請求先未設定）';
+    const expectedIssuer=snapshot.settings.issuer.companyName||'';
+    const actualClient=backupText(o.clientName,`発行履歴${index+1}件目の取引先`,300);
+    const actualIssuer=backupText(o.issuerName,`発行履歴${index+1}件目の発行者`,300);
+    if(actualClient!==expectedClient||actualIssuer!==expectedIssuer)backupFail(`発行履歴${index+1}件目の取引先または発行者がスナップショットと一致しません`);
+    snapshot.reports.forEach((x,ri)=>x.rep.records.forEach((r,rj)=>{
+      if(r.date<start||r.date>end)backupFail(`発行履歴${index+1}件目の明細${ri+1}件目の勤怠${rj+1}件目が請求期間外です`);
+    }));
   }
   return {
     id:backupId(o.id,`発行履歴${index+1}件目`),issuedAt,
@@ -513,9 +526,10 @@ function validateBackupPayload(raw){
     return rec;
   });
 
+  const legacyBackup=o.schemaVersion==null;
   const logIds=new Set();
   const invoiceLog=invoiceRaw.map((x,i)=>{
-    const issue=normalizeBackupIssue(x,i);
+    const issue=normalizeBackupIssue(x,i,legacyBackup);
     if(logIds.has(issue.id))backupFail(`発行履歴IDが重複しています: ${issue.id}`);logIds.add(issue.id);
     return issue;
   });
