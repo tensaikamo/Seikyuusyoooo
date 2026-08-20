@@ -3,7 +3,7 @@
    日給管理・請求書 — iPhone単一HTML版（依存ゼロ）
    ネイビー×白 / IndexedDB / A4 2ページPDF
    ============================================================= */
-const APP_VERSION='1.7.1';
+const APP_VERSION='1.8.0';
 
 /* ---------- HTML escape ---------- */
 function esc(s){return String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
@@ -31,6 +31,7 @@ let STATE={
   records:[],        // {id,employeeId,date,attendance,overtimeHours,nightAttendance,nightOvertimeHours,transportFee,note}
   settings:JSON.parse(JSON.stringify(DEFAULT_SETTINGS)),
   invoiceLog:[],     // 発行履歴（電子帳簿保存法）。追記のみ・削除しない
+  usageLog:[],       // 利用の記録（端末内のみ。送信は本人の操作で行う）
   ready:false
 };
 let viewY=new Date().getFullYear(), viewM=new Date().getMonth()+1; // 1-12
@@ -67,6 +68,27 @@ const saveRecords=()=>{invalidateIdx();return idbSet('records',STATE.records);};
 const saveSettings=()=>{dashDirty=true;attDirty=true;return idbSet('settings',STATE.settings);};
 const saveInvoiceLog=()=>idbSet('invoiceLog',STATE.invoiceLog);
 const saveReady=()=>idbSet('ready',STATE.ready);
+
+/* ---------- 利用の記録 ----------
+   端末の中だけに貯める。送信は本人が設定タブでボタンを押したときだけ行う。
+   自動でどこかへ送ることはしない。 */
+const USAGE_MAX=400;
+let usageDirty=false;
+function logUse(kind,detail){
+  try{
+    if(!Array.isArray(STATE.usageLog))STATE.usageLog=[];
+    STATE.usageLog.push({t:Date.now(),k:kind,v:detail==null?'':String(detail).slice(0,200)});
+    if(STATE.usageLog.length>USAGE_MAX)STATE.usageLog=STATE.usageLog.slice(-USAGE_MAX);
+    usageDirty=true;
+  }catch(e){}
+}
+const saveUsage=()=>{usageDirty=false;return idbSet('usageLog',STATE.usageLog);};
+// 書き込みが増えすぎないよう、まとめて保存する
+setInterval(()=>{if(usageDirty)saveUsage();},20000);
+window.addEventListener('pagehide',()=>{if(usageDirty)saveUsage();});
+// 気づかれない不具合を拾うため、エラーは必ず記録する
+window.addEventListener('error',e=>logUse('error',`${e.message} @${(e.filename||'').split('/').pop()}:${e.lineno}`));
+window.addEventListener('unhandledrejection',e=>logUse('error','promise: '+(e.reason&&e.reason.message||e.reason)));
 
 /* ---------- utils ---------- */
 function $(id){return document.getElementById(id);}
@@ -314,6 +336,8 @@ async function boot(){
     if(set)STATE.settings=mergeSettings(set);
     if(ready)STATE.ready=ready;
     if(Array.isArray(ilog))STATE.invoiceLog=ilog;
+    const ulog=await idbGet('usageLog');
+    if(Array.isArray(ulog))STATE.usageLog=ulog;
     if(!ready) await migrate();
   }catch(e){toast('⚠️ データ読込エラー');}
   invalidateIdx();
@@ -346,6 +370,7 @@ async function boot(){
   const hideSplash=()=>sp.classList.add('hide');
   setTimeout(hideSplash,1500);
   sp.addEventListener('pointerdown',hideSplash,{once:true});
+  logUse('起動',APP_VERSION+' / '+(navigator.standalone?'ホーム画面':'ブラウザ'));
   renderAll();
   switchTab('home');
 }
@@ -395,6 +420,7 @@ function prepareTab(t){
   if(t==='set')renderSettingsLists();
 }
 function switchTab(t){
+  logUse('tab',t);
   const from=TAB_ORDER.indexOf(curTab),to=TAB_ORDER.indexOf(t);
   const same=(from===to),back=(to<from);
   curTab=t;
@@ -826,7 +852,7 @@ function renderEmpRow(){
 }
 
 let attView='list'; // 'list' | 'cal'
-function setAttView(v){attView=v;haptic();renderAtt();}
+function setAttView(v){logUse('表示切替',v);attView=v;haptic();renderAtt();}
 window.setAttView=setAttView;
 
 function blankRec(){return {attendance:0,overtimeHours:0,nightAttendance:0,nightOvertimeHours:0,transportFee:0};}
@@ -1039,6 +1065,7 @@ function renderAtt(){
 /* ---------- 日別シート（カレンダーのセルタップ） ---------- */
 let daySheetDate=null;
 function openDaySheet(ds){
+  logUse('日別シート');
   if(!selEmp)return;
   daySheetDate=ds;
   renderDaySheet();
@@ -1115,6 +1142,7 @@ function toggleNight(ds){
 window.toggleNight=toggleNight;
 /* 車代を本人に渡したかどうか。基本は渡さないので、渡した日だけ印を付ける */
 function toggleTrGive(ds){
+  logUse('車代を渡す');
   if(!selEmp)return;
   const rec=STATE.records.find(r=>r.employeeId===selEmp&&r.date===ds);
   if(!rec)return;
@@ -1134,6 +1162,7 @@ window.toggleManual=toggleManual;
 
 /* 一括入力：平日を1で埋める／この月をクリア */
 function bulkFill(mode){
+  logUse('一括入力',mode);
   if(!selEmp)return;
   const days=daysInMonthList(viewY,viewM);
   if(mode==='clear'){
@@ -1419,6 +1448,7 @@ function buildPaySlipHTML(emp,rep,period,cssMode){
   </div>`;
 }
 function makePaySlip(empId){
+  logUse('支払明細');
   const emp=STATE.employees.find(e=>e.id===empId);if(!emp)return;
   const period=billingPeriod(billY,billM,STATE.settings.closingDay);
   const rep=payReport(emp,period.start,period.end);
@@ -1500,6 +1530,7 @@ let pendingIssue=null;   // プレビュー中の請求書（保存・印刷を�
 let pendingLogged=false; // 同じプレビューから二重に記録しないためのフラグ
 
 function makeInvoice(empId){
+  logUse('請求書');
   const emp=STATE.employees.find(e=>e.id===empId);if(!emp)return;
   const s=STATE.settings;
   const period=billingPeriod(billY,billM,s.closingDay);
@@ -1851,7 +1882,7 @@ function buildClosingOptions(){
   const sel=$('set-closing');sel.innerHTML='';
   // 29日・30日は月によって存在しないため「月末締め」に寄せる（billingPeriod も29以上を月末扱い）
   for(let d=1;d<=28;d++){const o=document.createElement('option');o.value=d;o.textContent=d+'日締め';sel.appendChild(o);}
-  const o=document.createElement('option');o.value=31;o.textContent='月末締め（29日・30日もこちら）';sel.appendChild(o);
+  const o=document.createElement('option');o.value=31;o.textContent='月末締め';sel.appendChild(o);
 }
 /* 選んだ締め日で今月分がどの期間になるかをその場で見せる */
 function updateClosingHint(){
@@ -1859,7 +1890,8 @@ function updateClosingHint(){
   const n=new Date(),y=n.getFullYear(),m=n.getMonth()+1;
   const per=billingPeriod(y,m,STATE.settings.closingDay);
   const md=d=>`${+d.slice(5,7)}/${+d.slice(8,10)}`;
-  el.textContent=`${m}月分＝${md(per.start)}〜${md(per.end)}（${daysInPeriod(per.start,per.end).length}日間）`;
+  const note=STATE.settings.closingDay>=29?'（29日・30日締めも月末締めを選んでください）':'';
+  el.textContent=`${m}月分＝${md(per.start)}〜${md(per.end)}（${daysInPeriod(per.start,per.end).length}日間）${note}`;
 }
 function loadSettingsForm(){
   const s=STATE.settings;
@@ -1894,6 +1926,7 @@ function bindSettings(){
   });
 }
 function renderSettingsLists(){
+  renderReportPreview();
   renderDataHealth();
   renderInvoiceLog();
   const list=$('set-emp-list');list.innerHTML='';
@@ -1905,6 +1938,96 @@ function renderSettingsLists(){
   });
 }
 $('set-add-emp').addEventListener('click',()=>openEmpModal(null));
+
+/* ---------- 開発者へのレポート ----------
+   何が入るかを画面に出したうえで、本人がボタンを押したときだけ書き出す。
+   自動送信は一切しない。実データを含めるかも本人が選ぶ。 */
+function usageSummary(){
+  const L=Array.isArray(STATE.usageLog)?STATE.usageLog:[];
+  const cnt={},errs=[];
+  L.forEach(e=>{
+    if(e.k==='error'){errs.push(e);return;}
+    const key=e.k+(e.v?'：'+e.v:'');
+    cnt[key]=(cnt[key]||0)+1;
+  });
+  const top=Object.entries(cnt).sort((a,b)=>b[1]-a[1]);
+  const first=L.length?new Date(L[0].t):null;
+  return {件数:L.length,期間:first?`${first.toLocaleDateString('ja-JP')}〜`:'記録なし',
+    よく使う操作:top,エラー:errs};
+}
+function buildReport(includeData){
+  const s=usageSummary();
+  const dt=new Date();
+  const lines=[];
+  lines.push('■ 利用レポート');
+  lines.push(`作成日時：${dt.toLocaleString('ja-JP')}`);
+  lines.push(`アプリ版：${APP_VERSION}`);
+  lines.push(`端末：${navigator.userAgent}`);
+  lines.push(`起動方法：${navigator.standalone?'ホーム画面から':'ブラウザから'}`);
+  lines.push(`画面：${screen.width}x${screen.height}`);
+  lines.push('');
+  lines.push('■ 規模');
+  lines.push(`従業員：${STATE.employees.length}名 ／ 勤怠：${STATE.records.length}件 ／ 発行履歴：${STATE.invoiceLog.length}件`);
+  lines.push(`締め日：${STATE.settings.closingDay===31?'月末':STATE.settings.closingDay+'日'} ／ 税率：${STATE.settings.taxRate}%`);
+  const withPay=STATE.employees.filter(e=>(e.payWage||0)>0).length;
+  lines.push(`支払単価を設定した従業員：${withPay}名 ／ 単価履歴あり：${STATE.employees.filter(e=>Array.isArray(e.wageHistory)&&e.wageHistory.length).length}名`);
+  lines.push('');
+  lines.push(`■ 使い方（記録 ${s.件数}件 ${s.期間}）`);
+  s.よく使う操作.slice(0,25).forEach(([k,n])=>lines.push(`  ${n}回  ${k}`));
+  if(!s.よく使う操作.length)lines.push('  （記録なし）');
+  lines.push('');
+  lines.push(`■ エラー（${s.エラー.length}件）`);
+  if(!s.エラー.length)lines.push('  なし');
+  else s.エラー.slice(-30).forEach(e=>lines.push(`  ${new Date(e.t).toLocaleString('ja-JP')}  ${e.v}`));
+  lines.push('');
+  const memo=($('rep-memo')&&$('rep-memo').value.trim())||'';
+  lines.push('■ 困っていること・要望');
+  lines.push(memo?memo:'  （記入なし）');
+  lines.push('');
+  const out={report:lines.join('\n')};
+  if(includeData){
+    out.data=JSON.parse(buildBackup());
+  }
+  return out;
+}
+function renderReportPreview(){
+  const box=$('rep-preview');if(!box)return;
+  const inc=$('rep-include')&&$('rep-include').checked;
+  const r=buildReport(inc);
+  let txt=r.report;
+  if(inc){
+    const emps=STATE.employees.map(e=>e.name).join('・')||'（なし）';
+    txt+='■ 含める実データ\n';
+    txt+=`  従業員の氏名：${emps}\n`;
+    txt+=`  単価・勤怠・請求先・銀行口座・登録番号を含む全データ（${STATE.records.length}件）\n`;
+  }else{
+    txt+='■ 実データ\n  含めません（氏名・金額・取引先は一切入りません）\n';
+  }
+  box.textContent=txt;
+}
+async function sendReport(){
+  const inc=$('rep-include')&&$('rep-include').checked;
+  if(inc&&!confirm('従業員の氏名・給与額・取引先・銀行口座を含むデータを書き出します。\n\nこの内容を開発者に渡してよいか、従業員の方の了解は取れていますか？\n\nOKで書き出します。'))return;
+  const r=buildReport(inc);
+  const name=`利用レポート_${ymd(new Date().getFullYear(),new Date().getMonth()+1,new Date().getDate()).replace(/-/g,'')}`;
+  const files=[new File([r.report],name+'.txt',{type:'text/plain'})];
+  if(inc)files.push(new File([JSON.stringify(r.data,null,2)],name+'_データ.json',{type:'application/json'}));
+  // 共有できる端末はLINEやメールへ、できなければ保存する
+  try{
+    if(navigator.canShare&&navigator.canShare({files})){
+      await navigator.share({files,title:'利用レポート'});
+      logUse('レポート送信',inc?'実データあり':'記録のみ');saveUsage();
+      toast('送信画面を開きました');return;
+    }
+  }catch(e){ if(e&&e.name==='AbortError')return; }
+  files.forEach(f=>{
+    const url=URL.createObjectURL(f);const a=document.createElement('a');
+    a.href=url;a.download=f.name;document.body.appendChild(a);a.click();document.body.removeChild(a);
+    setTimeout(()=>URL.revokeObjectURL(url),1500);
+  });
+  logUse('レポート保存',inc?'実データあり':'記録のみ');saveUsage();
+  toast('ファイルに保存しました');
+}
 
 /* ---------- データの健全性チェック ----------
    入力の上限を付ける前に保存された異常値（桁の打ち間違いなど）を洗い出して知らせる。
@@ -2109,4 +2232,7 @@ $('reload-btn').addEventListener('click',async()=>{
   location.replace(location.pathname+'?u='+Date.now());
 });
 
+$('rep-send').addEventListener('click',sendReport);
+$('rep-include').addEventListener('change',renderReportPreview);
+$('rep-memo').addEventListener('input',renderReportPreview);
 bindSettings();

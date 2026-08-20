@@ -428,6 +428,19 @@ i.dot-night{background:var(--night);}
   margin:16px 0 9px;padding-bottom:5px;border-bottom:1px solid var(--line);display:flex;
   align-items:baseline;justify-content:space-between;gap:8px;}
 .sect-lbl span{font-size:.68rem;font-weight:500;color:var(--mut);letter-spacing:0;}
+textarea{width:100%;padding:11px 13px;background:#f6f8fb;border:1px solid var(--line-2);
+  border-radius:var(--r-sm);outline:none;resize:vertical;min-height:74px;line-height:1.6;
+  font-size:16px;margin-bottom:12px;}
+textarea:focus{border-color:var(--navy-3);background:#fff;}
+.chk{display:flex;gap:10px;align-items:flex-start;margin:4px 0 12px;cursor:pointer;}
+.chk input{width:22px;height:22px;flex-shrink:0;margin-top:1px;accent-color:var(--navy-3);}
+.chk span{font-size:var(--fs-sm);color:var(--sub);line-height:1.6;}
+.chk span b{display:block;font-size:var(--fs-xs);color:var(--danger);font-weight:700;margin-top:2px;}
+.rep-title{font-size:var(--fs-xs);font-weight:800;color:var(--mut);letter-spacing:.06em;margin-bottom:6px;}
+.rep-preview{background:#f4f7fc;border:1px solid var(--line);border-radius:9px;padding:11px 12px;
+  font-size:.66rem;line-height:1.65;color:var(--sub);max-height:210px;overflow:auto;
+  white-space:pre-wrap;word-break:break-all;margin-bottom:12px;
+  font-family:ui-monospace,SFMono-Regular,Menlo,monospace;-webkit-overflow-scrolling:touch;}
 .closing-hint{font-size:var(--fs-xs);color:var(--sub);margin-top:6px;line-height:1.5;}
 .data-btns{display:flex;flex-direction:column;gap:9px;}
 /* ===== 発行履歴（電子帳簿保存法） ===== */
@@ -663,6 +676,19 @@ i.dot-night{background:var(--night);}
           <button class="btn btn-ghost btn-sm" id="import-btn" type="button"><svg class="ic" viewBox="0 0 24 24"><path d="M12 13.3V3.5M8.2 7.3L12 3.5l3.8 3.8"/><path d="M4.5 15v2.9A2.6 2.6 0 0 0 7.1 20.5h9.8a2.6 2.6 0 0 0 2.6-2.6V15"/></svg>バックアップから復元</button>
           <button class="btn btn-danger btn-sm" id="reset-btn" type="button">全データをリセット</button>
         </div>
+      </div>
+      <!-- 開発者へのレポート -->
+      <div class="card">
+        <div class="card-t">開発者にようすを伝える</div>
+        <div class="ebook-note">アプリの使い方の記録は<b>この端末の中だけ</b>に保存されています。
+          勝手に送られることはありません。下のボタンを押したときだけ書き出されます。</div>
+        <label class="fl">困っていること・要望（任意）</label>
+        <textarea id="rep-memo" rows="3" placeholder="例：夜勤の入力がしにくい／請求書に現場名を入れたい"></textarea>
+        <label class="chk"><input type="checkbox" id="rep-include">
+          <span>実データも含める<b>従業員の氏名・給与額・取引先・銀行口座が入ります</b></span></label>
+        <div class="rep-title">送られる内容</div>
+        <pre class="rep-preview" id="rep-preview"></pre>
+        <button class="btn btn-navy" id="rep-send" type="button">この内容を送る</button>
       </div>
       <!-- 情報 -->
       <div class="card">
