@@ -454,6 +454,10 @@ textarea:focus{border-color:var(--navy-3);background:#fff;}
 .rep-adv-body{padding-top:6px;}
 .rep-adv-body input{margin-bottom:10px;}
 .rep-adv-body .btn{margin-top:2px;}
+.chk-auto{margin-top:12px;}
+.chk-auto input{margin-bottom:0;}
+.rep-auto-state{font-size:var(--fs-xs);color:var(--navy-3);font-weight:700;
+  margin-top:10px;line-height:1.5;}
 .closing-hint{font-size:var(--fs-xs);color:var(--sub);margin-top:6px;line-height:1.5;}
 .data-btns{display:flex;flex-direction:column;gap:9px;}
 /* ===== 発行履歴（電子帳簿保存法） ===== */
@@ -714,6 +718,12 @@ textarea:focus{border-color:var(--navy-3);background:#fff;}
             <label class="fl">合言葉</label>
             <input id="rep-key" type="password" autocomplete="off" placeholder="（開発者から聞いたもの）">
             <button class="btn btn-ghost btn-sm" id="rep-test" type="button">つながるか試す</button>
+            <label class="chk chk-auto"><input type="checkbox" id="rep-auto">
+              <span>自動で送る<b>アプリを開いたときと閉じたときに、ボタンを押さなくても送ります</b></span></label>
+            <label class="chk chk-auto"><input type="checkbox" id="rep-auto-data">
+              <span>自動送信にも実データを含める<b>従業員の氏名・給与額・取引先・銀行口座が入ります。
+                アプリを直すだけなら不要です（記録だけで足ります）</b></span></label>
+            <div class="rep-auto-state" id="rep-auto-state"></div>
           </div>
         </details>
       </div>

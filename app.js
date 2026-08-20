@@ -3,7 +3,7 @@
    日給管理・請求書 — iPhone単一HTML版（依存ゼロ）
    ネイビー×白 / IndexedDB / A4 2ページPDF
    ============================================================= */
-const APP_VERSION='1.8.1';
+const APP_VERSION='1.9.0';
 
 /* ---------- HTML escape ---------- */
 function esc(s){return String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
@@ -31,8 +31,9 @@ let STATE={
   records:[],        // {id,employeeId,date,attendance,overtimeHours,nightAttendance,nightOvertimeHours,transportFee,note}
   settings:JSON.parse(JSON.stringify(DEFAULT_SETTINGS)),
   invoiceLog:[],     // 発行履歴（電子帳簿保存法）。追記のみ・削除しない
-  usageLog:[],       // 利用の記録（端末内のみ。送信は本人の操作で行う）
-  reportDest:{url:'',key:''}, // レポートの送信先。バックアップにも送信内容にも含めない
+  usageLog:[],       // 利用の記録
+  // レポートの送信先と自動送信の設定。バックアップにもレポート本文にも含めない
+  reportDest:{url:'',key:'',auto:false,autoData:false,lastAt:0,lastSig:'',device:''},
   ready:false
 };
 let viewY=new Date().getFullYear(), viewM=new Date().getMonth()+1; // 1-12
@@ -91,9 +92,34 @@ window.addEventListener('pagehide',()=>{if(usageDirty)saveUsage();});
 window.addEventListener('error',e=>logUse('error',`${e.message} @${(e.filename||'').split('/').pop()}:${e.lineno}`));
 window.addEventListener('unhandledrejection',e=>logUse('error','promise: '+(e.reason&&e.reason.message||e.reason)));
 
+/* ---------- 詰まりどころの記録 ----------
+   「何を押したか」だけ数えても、どこで困っているかは分からない。
+   打ち直し・開いたのに使わなかった・警告が出た、といった
+   うまくいかなかった形跡を残す。氏名や金額は一切記録しない。 */
+const friction={edits:new Map(),opened:new Map()};
+// 同じ欄を何度も打ち直しているなら、その欄が入れにくいということ
+function noteEdit(date,field){
+  const k=field+'@'+date;
+  const n=(friction.edits.get(k)||0)+1;
+  friction.edits.set(k,n);
+  if(n===4)logUse('打ち直し',field);   // 4回目で1度だけ記録する
+}
+// 開いたのに使わずに閉じた欄は、期待外れだったということ
+function noteOpen(what){friction.opened.set(what,Date.now());}
+function noteUsed(what){friction.opened.delete(what);}
+function noteClosed(what){
+  if(!friction.opened.has(what))return;
+  friction.opened.delete(what);
+  logUse('使わず閉じた',what);
+}
+
 /* ---------- utils ---------- */
 function $(id){return document.getElementById(id);}
-function toast(m){const e=$('toast');e.textContent=m;e.classList.add('show');clearTimeout(e._t);e._t=setTimeout(()=>e.classList.remove('show'),2200);}
+function toast(m){
+  // 警告の出た回数はそのまま「使いにくかった回数」なので必ず記録する
+  if(/⚠️/.test(m))logUse('警告',m.replace(/⚠️\s*/,'').slice(0,60));
+  const e=$('toast');e.textContent=m;e.classList.add('show');clearTimeout(e._t);e._t=setTimeout(()=>e.classList.remove('show'),2200);
+}
 /* iOS標準スイッチの触覚を借りて振動させる。label.click() は対象のチェックボックスへ
    フォーカスを移してしまうため、元のフォーカス（入力中の欄）を必ず戻す。 */
 function haptic(){
@@ -340,7 +366,11 @@ async function boot(){
     const ulog=await idbGet('usageLog');
     if(Array.isArray(ulog))STATE.usageLog=ulog;
     const dest=await idbGet('reportDest');
-    if(dest&&typeof dest==='object')STATE.reportDest={url:String(dest.url||''),key:String(dest.key||'')};
+    if(dest&&typeof dest==='object')STATE.reportDest={
+      url:String(dest.url||''),key:String(dest.key||''),
+      auto:!!dest.auto,autoData:!!dest.autoData,
+      lastAt:Number(dest.lastAt)||0,lastSig:String(dest.lastSig||''),
+      device:String(dest.device||'')};
     if(!ready) await migrate();
   }catch(e){toast('⚠️ データ読込エラー');}
   invalidateIdx();
@@ -377,6 +407,7 @@ async function boot(){
   logUse('起動',APP_VERSION+' / '+(navigator.standalone?'ホーム画面':'ブラウザ'));
   renderAll();
   switchTab('home');
+  startAutoReport();
 }
 function mergeSettings(s){
   return {...DEFAULT_SETTINGS,...s,
@@ -425,6 +456,9 @@ function prepareTab(t){
 }
 function switchTab(t){
   logUse('tab',t);
+  // 請求タブまで来たのに請求書を作らずに離れたなら、そこで止まっている
+  if(t==='bill')noteOpen('請求タブ（作らず離脱）');
+  else if(curTab==='bill')noteClosed('請求タブ（作らず離脱）');
   const from=TAB_ORDER.indexOf(curTab),to=TAB_ORDER.indexOf(t);
   const same=(from===to),back=(to<from);
   curTab=t;
@@ -1118,6 +1152,12 @@ function setAtt(date,field,value){
   if((field==='attendance'||field==='nightAttendance')&&
      (rec.attendance||0)===0&&(rec.nightAttendance||0)===0)rec.transportFee=0;
   if(field==='manualTotal'&&v===0)manualExpanded.delete(xk(date));
+  // どの欄を何度も打ち直しているかを見る（入れた数字そのものは記録しない）
+  noteEdit(date,INPUT_LABEL[field]||field);
+  if(v>0){
+    if(field==='manualTotal'){noteUsed('合計の手入力欄');logUse('手入力で合計を上書き');}
+    if(field==='nightAttendance'||field==='nightOvertimeHours')noteUsed('夜勤欄');
+  }
   saveRecords();
   haptic();
   refreshDay(date,field);
@@ -1138,7 +1178,9 @@ function refreshDay(ds,field){
   updateRunTotal(emp);
 }
 function toggleNight(ds){
-  const k=xk(ds);if(nightExpanded.has(k))nightExpanded.delete(k);else nightExpanded.add(k);
+  const k=xk(ds);
+  if(nightExpanded.has(k)){nightExpanded.delete(k);noteClosed('夜勤欄');}
+  else{nightExpanded.add(k);noteOpen('夜勤欄');logUse('夜勤欄を開く');}
   haptic();
   refreshDay(ds,'attendance');
   if(daySheetDate)renderDaySheet();
@@ -1157,7 +1199,9 @@ function toggleTrGive(ds){
 }
 window.toggleTrGive=toggleTrGive;
 function toggleManual(ds){
-  const k=xk(ds);if(manualExpanded.has(k))manualExpanded.delete(k);else manualExpanded.add(k);
+  const k=xk(ds);
+  if(manualExpanded.has(k)){manualExpanded.delete(k);noteClosed('合計の手入力欄');}
+  else{manualExpanded.add(k);noteOpen('合計の手入力欄');logUse('手入力欄を開く');}
   haptic();
   refreshDay(ds,'attendance');
   if(daySheetDate)renderDaySheet();
@@ -1226,10 +1270,15 @@ function openEmpModal(id){
   $('emp-nwage').value=(emp&&emp.nightWage)?emp.nightWage:'';
   $('emp-delete').style.display=emp?'flex':'none';
   updateEmpHint();
+  noteOpen(id?'従業員の編集':'従業員の追加');
+  logUse('従業員',id?'編集を開く':'追加を開く');
   $('emp-modal').classList.add('show');
 }
 window.openEmpModal=openEmpModal;
-function closeEmpModal(){$('emp-modal').classList.remove('show');editEmpId=null;}
+function closeEmpModal(){
+  noteClosed(editEmpId?'従業員の編集':'従業員の追加');
+  $('emp-modal').classList.remove('show');editEmpId=null;
+}
 $('emp-modal-close').addEventListener('click',closeEmpModal);
 $('emp-modal').addEventListener('click',e=>{if(e.target===$('emp-modal'))closeEmpModal();});
 $('emp-wage').addEventListener('input',updateEmpHint);
@@ -1243,6 +1292,7 @@ function updateEmpHint(){
   $('emp-ot-hint').innerHTML=lines.join('<br>');
 }
 $('emp-save').addEventListener('click',()=>{
+  noteUsed(editEmpId?'従業員の編集':'従業員の追加');
   const name=$('emp-name').value.trim();
   const wage=parseInt($('emp-wage').value,10);
   const nwageRaw=$('emp-nwage').value.trim();
@@ -1534,7 +1584,7 @@ let pendingIssue=null;   // プレビュー中の請求書（保存・印刷を�
 let pendingLogged=false; // 同じプレビューから二重に記録しないためのフラグ
 
 function makeInvoice(empId){
-  logUse('請求書');
+  logUse('請求書');noteUsed('請求タブ（作らず離脱）');
   const emp=STATE.employees.find(e=>e.id===empId);if(!emp)return;
   const s=STATE.settings;
   const period=billingPeriod(billY,billM,s.closingDay);
@@ -1552,6 +1602,7 @@ function makeInvoice(empId){
 window.makeInvoice=makeInvoice;
 
 $('batch-pdf-btn').addEventListener('click',()=>{
+  logUse('請求書','まとめて');noteUsed('請求タブ（作らず離脱）');
   const s=STATE.settings;
   const period=billingPeriod(billY,billM,s.closingDay);
   const reports=STATE.employees.map(e=>({emp:e,rep:periodReport(e,period.start,period.end)})).filter(x=>x.rep.grandTotal>0);
@@ -1944,26 +1995,52 @@ function renderSettingsLists(){
 $('set-add-emp').addEventListener('click',()=>openEmpModal(null));
 
 /* ---------- 開発者へのレポート ----------
-   何が入るかを画面に出したうえで、本人がボタンを押したときだけ書き出す。
-   自動送信は一切しない。実データを含めるかも本人が選ぶ。 */
+   目的は「アプリを直すための材料」を集めること。
+   氏名・金額・取引先は入れない。数えた回数と、うまくいかなかった形跡だけを送る。 */
 function usageSummary(){
   const L=Array.isArray(STATE.usageLog)?STATE.usageLog:[];
-  const cnt={},errs=[];
+  const cnt={},errs=[],warns={},stuck={},days=new Set(),hours=new Array(24).fill(0);
   L.forEach(e=>{
+    const d=new Date(e.t);
+    days.add(d.toDateString());hours[d.getHours()]++;
     if(e.k==='error'){errs.push(e);return;}
+    if(e.k==='警告'){warns[e.v]=(warns[e.v]||0)+1;return;}
+    if(e.k==='打ち直し'||e.k==='使わず閉じた'){
+      const key=(e.k==='打ち直し'?'何度も打ち直した：':'開いたのに使わなかった：')+e.v;
+      stuck[key]=(stuck[key]||0)+1;return;
+    }
     const key=e.k+(e.v?'：'+e.v:'');
     cnt[key]=(cnt[key]||0)+1;
   });
   const top=Object.entries(cnt).sort((a,b)=>b[1]-a[1]);
   const first=L.length?new Date(L[0].t):null;
+  // よく触っている時間帯。現場で入れているのか帰ってから入れているのかが分かる
+  let peak='';
+  const maxH=Math.max(...hours);
+  if(maxH>0)peak=hours.map((n,h)=>({n,h})).filter(x=>x.n>=maxH*0.6)
+    .map(x=>x.h+'時').join('・');
   return {件数:L.length,期間:first?`${first.toLocaleDateString('ja-JP')}〜`:'記録なし',
-    よく使う操作:top,エラー:errs};
+    よく使う操作:top,エラー:errs,
+    警告:Object.entries(warns).sort((a,b)=>b[1]-a[1]),
+    詰まり:Object.entries(stuck).sort((a,b)=>b[1]-a[1]),
+    使った日数:days.size,よく使う時間:peak};
 }
-function buildReport(includeData){
+/* 設定の埋まり具合。ここが欠けていると請求書として通らないので、
+   使われていないのか、埋め方が分からないのかを切り分ける材料になる。 */
+function setupGaps(){
+  const s=STATE.settings,g=[];
+  if(!s.issuer.companyName)g.push('屋号・氏名');
+  if(!s.issuer.invoiceNumber)g.push('インボイス登録番号');
+  if(!s.issuer.address)g.push('住所');
+  if(!s.client.companyName)g.push('請求先');
+  if(!s.bank.bankName||!s.bank.accountNumber)g.push('振込口座');
+  return g;
+}
+function buildReport(includeData,isAuto){
   const s=usageSummary();
   const dt=new Date();
   const lines=[];
-  lines.push('■ 利用レポート');
+  lines.push(isAuto?'■ 利用レポート（自動送信）':'■ 利用レポート');
   lines.push(`作成日時：${dt.toLocaleString('ja-JP')}`);
   lines.push(`アプリ版：${APP_VERSION}`);
   lines.push(`端末：${navigator.userAgent}`);
@@ -1976,10 +2053,35 @@ function buildReport(includeData){
   const withPay=STATE.employees.filter(e=>(e.payWage||0)>0).length;
   lines.push(`支払単価を設定した従業員：${withPay}名 ／ 単価履歴あり：${STATE.employees.filter(e=>Array.isArray(e.wageHistory)&&e.wageHistory.length).length}名`);
   lines.push('');
+
+  // ここから下が「直すための材料」。数字より、うまくいかなかった形跡を先に出す
+  lines.push('■ 詰まっているところ');
+  if(!s.詰まり.length&&!s.警告.length)lines.push('  見当たりません');
+  s.詰まり.forEach(([k,n])=>lines.push(`  ${n}回  ${k}`));
+  s.警告.forEach(([k,n])=>lines.push(`  ${n}回  警告が出た：${k}`));
+  lines.push('');
+
+  lines.push('■ 最後までたどり着けているか');
+  const hasAtt=STATE.records.some(recHasData);
+  const madeInv=STATE.invoiceLog.length>0;
+  lines.push(`  勤怠を入れた：${hasAtt?'はい':'いいえ'}`);
+  lines.push(`  請求書を作れた：${madeInv?`はい（${STATE.invoiceLog.length}件）`:'いいえ'}`);
+  const manualDays=STATE.records.filter(r=>safeNum(r.manualTotal,INPUT_MAX.manualTotal)>0).length;
+  if(manualDays)lines.push(`  合計を手入力で上書きした日：${manualDays}日（自動計算が合っていない可能性）`);
+  const nightDays=STATE.records.filter(r=>safeNum(r.nightAttendance,INPUT_MAX.nightAttendance)>0).length;
+  lines.push(`  夜勤を入れた日：${nightDays}日`);
+  const gaps=setupGaps();
+  lines.push(gaps.length?`  設定の未入力：${gaps.join('・')}`:'  設定は埋まっています');
+  const bad=dataIssues();
+  lines.push(bad.length?`  おかしな値の警告：${bad.length}件`:'  データの警告：なし');
+  lines.push('');
+
   lines.push(`■ 使い方（記録 ${s.件数}件 ${s.期間}）`);
+  lines.push(`  使った日数：${s.使った日数}日${s.よく使う時間?` ／ よく触る時間帯：${s.よく使う時間}`:''}`);
   s.よく使う操作.slice(0,25).forEach(([k,n])=>lines.push(`  ${n}回  ${k}`));
   if(!s.よく使う操作.length)lines.push('  （記録なし）');
   lines.push('');
+
   lines.push(`■ エラー（${s.エラー.length}件）`);
   if(!s.エラー.length)lines.push('  なし');
   else s.エラー.slice(-30).forEach(e=>lines.push(`  ${new Date(e.t).toLocaleString('ja-JP')}  ${e.v}`));
@@ -2011,17 +2113,37 @@ function renderReportPreview(){
 }
 /* 送信先（サーバー）。設定とは分けて持つ。
    合言葉をバックアップやレポート本文に混ぜないための分離。 */
+function saveDest(){return idbSet('reportDest',STATE.reportDest);}
 function loadReportDest(){
-  const u=$('rep-url'),k=$('rep-key');if(!u||!k)return;
-  u.value=STATE.reportDest.url;k.value=STATE.reportDest.key;
+  const u=$('rep-url'),k=$('rep-key'),a=$('rep-auto'),ad=$('rep-auto-data');
+  if(!u||!k)return;
+  const d=STATE.reportDest;
+  u.value=d.url;k.value=d.key;
+  if(a)a.checked=!!d.auto;
+  if(ad)ad.checked=!!d.autoData;
   const save=()=>{
-    STATE.reportDest={url:u.value.trim(),key:k.value.trim()};
-    idbSet('reportDest',STATE.reportDest);
-    repStatus('');
+    d.url=u.value.trim();d.key=k.value.trim();
+    if(a)d.auto=a.checked;
+    if(ad)d.autoData=ad.checked;
+    saveDest();repStatus('');renderAutoState();
   };
   u.addEventListener('input',save);k.addEventListener('input',save);
+  if(a)a.addEventListener('change',()=>{save();if(a.checked)autoReport('設定を入れた直後',true);});
+  // 実データを含める設定を変えたら、その場で送り直して結果をすぐ確認できるようにする
+  if(ad)ad.addEventListener('change',()=>{save();if(d.auto)autoReport('設定を変えた直後',true);});
   const t=$('rep-test');
   if(t)t.addEventListener('click',testReportDest);
+  renderAutoState();
+}
+// 自動送信が今どうなっているかを画面に出しておく。
+// 黙って送るぶん、状態はいつでも見られるようにする。
+function renderAutoState(){
+  const el=$('rep-auto-state');if(!el)return;
+  const d=STATE.reportDest;
+  if(!d.auto||!d.url){el.textContent='';return;}
+  el.textContent=d.lastAt
+    ? `自動送信は入っています（最後に送ったのは ${new Date(d.lastAt).toLocaleString('ja-JP')}）`
+    : '自動送信は入っています（まだ一度も送っていません）';
 }
 function repStatus(msg,cls){
   const el=$('rep-status');if(!el)return;
@@ -2049,16 +2171,107 @@ async function testReportDest(){
     else repStatus('⚠️ '+res.msg,'ng');
   }catch(e){repStatus('⚠️ '+(e&&e.message||'つながりませんでした'),'ng');}
 }
-async function postReport(dest,payload){
-  const ctl=('AbortController'in window)?new AbortController():null;
+/* ---------- 自動送信 ----------
+   「自動で送る」を入れておくと、起動時とアプリを閉じるときに黙って送る。
+   使う人の操作を止めない（画面に何も出さない・失敗しても黙って次にまわす）。
+   毎回まるごと送ると無駄なので、前回から中身が変わったときだけ送る。 */
+const AUTO_INTERVAL=6*3600*1000;   // 最短6時間おき
+function deviceId(){
+  const d=STATE.reportDest;
+  // 端末を見分けるためだけの乱数。氏名や電話番号とは関係がない
+  if(!d.device){d.device=uid()+uid();saveDest();}
+  return d.device;
+}
+/* 最後に送った時刻。idbSet は非同期なので、閉じる瞬間の書き込みが間に合わず
+   直後の起動でもう一度送ってしまうことがあった。localStorage は同期で書けるので
+   こちらを併用して二重送信を防ぐ。 */
+function lastSentAt(){
+  let ls=0;
+  try{ls=Number(localStorage.getItem('autoReportAt'))||0;}catch(e){}
+  return Math.max(STATE.reportDest.lastAt||0,ls);
+}
+function markSent(sig){
+  const d=STATE.reportDest;
+  d.lastAt=Date.now();d.lastSig=sig;
+  try{localStorage.setItem('autoReportAt',String(d.lastAt));}catch(e){}
+  return saveDest();
+}
+function unmarkSent(at,sig){
+  const d=STATE.reportDest;
+  d.lastAt=at;d.lastSig=sig;
+  try{
+    if(at)localStorage.setItem('autoReportAt',String(at));
+    else localStorage.removeItem('autoReportAt');
+  }catch(e){}
+  return saveDest();
+}
+// 中身が変わったかを短い文字列で見る。同じものを何度も送らないため
+function dataSignature(){
+  const s=STATE.settings;
+  // 実データを含めるかどうかも「変化」として数える。
+  // これを入れないと、設定を切り替えても次に何か動くまで反映されない。
+  return [STATE.reportDest.autoData?'D':'-',
+    STATE.employees.length,STATE.records.length,STATE.invoiceLog.length,
+    (STATE.usageLog||[]).length,
+    STATE.records.reduce((a,r)=>a+(r.attendance||0)+(r.nightAttendance||0)+
+      (r.overtimeHours||0)+(r.nightOvertimeHours||0)+(r.transportFee||0)+(r.manualTotal||0),0),
+    STATE.employees.reduce((a,e)=>a+(e.dailyWage||0)+(e.nightWage||0)+(e.payWage||0)+(e.payNightWage||0),0),
+    s.closingDay,s.taxRate,s.defaultTransportFee,
+    (s.client&&s.client.companyName||'').length,
+    APP_VERSION].join('|');
+}
+function startAutoReport(){
+  autoReport('起動');
+  // ホーム画面に戻る・アプリを閉じるときが最後の機会。iOSはここを逃すと送れない
+  const onLeave=()=>{if(document.visibilityState==='hidden')autoReport('離脱',false,true);};
+  document.addEventListener('visibilitychange',onLeave);
+  window.addEventListener('pagehide',()=>autoReport('離脱',false,true));
+}
+async function autoReport(why,force,beacon){
+  try{
+    const d=STATE.reportDest;
+    if(!d.auto)return;
+    const dest=destOrNull();
+    if(!dest||dest.bad)return;
+    // 実データを送る設定のときは、閉じる瞬間には送らない。
+    // keepalive は 64KB までで、超えるとブラウザが黙って捨ててしまう。
+    // まるごと送るのは画面が生きている起動時にまとめてやる。
+    if(beacon&&d.autoData)return;
+    const sig=dataSignature();
+    // 変わっていないなら送らない。変わっていても6時間は空ける
+    if(!force){
+      if(sig===d.lastSig)return;
+      if(Date.now()-lastSentAt()<AUTO_INTERVAL)return;
+    }
+    if(usageDirty)await saveUsage();
+    const withData=!!d.autoData;
+    const r=buildReport(withData,true);
+    const payload={report:r.report,data:withData?r.data:null,
+      version:APP_VERSION,ua:navigator.userAgent,memo:'',
+      device:deviceId(),auto:true,why:String(why||'')};
+    // 送る前に印を付ける。閉じる瞬間の書き込みは待てないので、
+    // 先に印を残しておかないと次の起動で同じものをもう一度送ってしまう。
+    const prevAt=d.lastAt,prevSig=d.lastSig;
+    markSent(sig);
+    const res=await postReport(dest,payload,beacon);
+    if(!res.ok){await unmarkSent(prevAt,prevSig);return;}  // 失敗は黙って次の機会にまわす
+    renderAutoState();
+  }catch(e){/* 自動送信の失敗でアプリを止めない */}
+}
+async function postReport(dest,payload,keepalive){
+  const ctl=(!keepalive&&'AbortController'in window)?new AbortController():null;
   const timer=ctl?setTimeout(()=>ctl.abort(),15000):null;
   try{
     // 合言葉は本文に入れる。HTTPヘッダは英数字しか通せず、
     // 日本語を打たれると fetch 自体が例外になって原因が分からなくなるため。
+    const body=JSON.stringify(dest.key?Object.assign({key:dest.key},payload):payload);
+    // 画面を閉じる瞬間は keepalive。ページが消えても送信を続けてくれる。
+    // 上限 64KB を超えるとブラウザが黙って捨てるので、その場合は諦めて次回にまわす。
+    if(keepalive&&new Blob([body]).size>60000)return {ok:false,msg:'大きすぎるため次回に送ります'};
     const res=await fetch(dest.url,{
-      method:'POST',mode:'cors',cache:'no-store',
+      method:'POST',mode:'cors',cache:'no-store',keepalive:!!keepalive,
       headers:{'Content-Type':'application/json'},
-      body:JSON.stringify(dest.key?Object.assign({key:dest.key},payload):payload),
+      body,
       signal:ctl?ctl.signal:undefined
     });
     if(res.ok)return {ok:true};

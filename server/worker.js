@@ -101,9 +101,13 @@ async function ingest(request, env) {
   const now = Date.now();
   const id = String(now) + '-' + Math.random().toString(36).slice(2, 8);
   const cf = request.cf || {};
+  const device = String(body.device || '').replace(/[^\w-]/g, '').slice(0, 40) || who;
   const rec = {
     id,
     at: now,
+    device,
+    auto: !!body.auto,
+    why: String(body.why || '').slice(0, 40),
     version: String(body.version || '').slice(0, 20),
     ua: String(body.ua || request.headers.get('User-Agent') || '').slice(0, 300),
     memo: String(body.memo || '').slice(0, 2000),
@@ -115,18 +119,52 @@ async function ingest(request, env) {
   };
 
   const ttl = KEEP_DAYS * 86400;
+  const meta = {
+    at: now, version: rec.version, hasData: rec.hasData,
+    device, auto: rec.auto, region: rec.region,
+    memo: rec.memo.slice(0, 120),
+    scale: summarize(body.data)
+  };
   // 一覧用の見出しと、本体を分けて置く。一覧は本体を読まずに描ける
-  await env.REPORTS.put('r:' + id, JSON.stringify(rec), {
-    expirationTtl: ttl,
-    metadata: {
-      at: now, version: rec.version, hasData: rec.hasData,
-      from: who, region: rec.region,
-      memo: rec.memo.slice(0, 120),
-      lines: rec.report.split('\n').length
-    }
-  });
+  await env.REPORTS.put('r:' + id, JSON.stringify(rec), { expirationTtl: ttl, metadata: meta });
+
+  // 端末ごとの「いちばん新しい状態」。一覧の先頭に出す用。
+  // 実データの無いレポートで上書きすると規模の表示が消えてしまうので、
+  // そのときは前回わかっている数字と、それが取れた回を引き継ぐ。
+  const summary = { id, ...meta };
+  if (!summary.scale) {
+    try {
+      const prev = await env.REPORTS.get('d:' + device);
+      if (prev) {
+        const o = JSON.parse(prev);
+        if (o.scale) { summary.scale = o.scale; summary.dataId = o.dataId || o.id; }
+      }
+    } catch (e) { /* 引き継げなくても受信自体は成立させる */ }
+  } else {
+    summary.dataId = id;
+  }
+  await env.REPORTS.put('d:' + device, JSON.stringify(summary), { expirationTtl: ttl });
 
   return json({ ok: true, id }, 200, cors(env));
+}
+
+// 実データが付いていたら規模だけ取り出す。一覧で中身を開かずに様子が分かるように
+function summarize(data) {
+  if (!data || typeof data !== 'object') return null;
+  try {
+    const emps = Array.isArray(data.employees) ? data.employees : [];
+    const recs = Array.isArray(data.records) ? data.records : [];
+    let att = 0, last = '';
+    recs.forEach(r => {
+      att += (Number(r.attendance) || 0) + (Number(r.nightAttendance) || 0);
+      if (typeof r.date === 'string' && r.date > last) last = r.date;
+    });
+    return {
+      emps: emps.length, recs: recs.length,
+      att: Math.round(att * 10) / 10, last,
+      logs: Array.isArray(data.invoiceLog) ? data.invoiceLog.length : 0
+    };
+  } catch (e) { return null; }
 }
 
 /* ---------- 管理画面 ---------- */
@@ -138,8 +176,11 @@ const STYLE = `
  h1{font-size:20px;margin:0 0 4px}
  .sub{opacity:.6;font-size:13px;margin-bottom:20px}
  table{width:100%;border-collapse:collapse;font-size:14px}
- th,td{text-align:left;padding:10px 8px;border-bottom:1px solid rgba(128,128,128,.25);vertical-align:top}
+ th,td{text-align:left;padding:10px 12px 10px 0;border-bottom:1px solid rgba(128,128,128,.25);
+       vertical-align:top;white-space:nowrap}
  th{font-size:12px;opacity:.6;font-weight:600}
+ td.num,th.num{text-align:right;font-variant-numeric:tabular-nums;padding-right:0}
+ td.memo{white-space:normal;min-width:200px;max-width:340px}
  tr:hover td{background:rgba(128,128,128,.08)}
  a{color:#0a84ff;text-decoration:none}
  a:hover{text-decoration:underline}
@@ -149,43 +190,177 @@ const STYLE = `
      padding:16px;border-radius:12px;font-size:13px;line-height:1.6}
  .empty{opacity:.5;padding:40px 0;text-align:center}
  .back{display:inline-block;margin-bottom:16px}
+ .card{border:1px solid rgba(128,128,128,.3);border-radius:14px;padding:16px 18px;margin-bottom:18px}
+ .card h2{font-size:15px;margin:0 0 2px}
+ .kpi{display:flex;gap:22px;flex-wrap:wrap;margin:12px 0 2px}
+ .kpi div{font-size:12px;opacity:.6}
+ .kpi b{display:block;font-size:22px;font-variant-numeric:tabular-nums;opacity:1}
+ .fresh{color:#30a46c;font-weight:700}
+ .stale{color:#e5484d;font-weight:700}
+ .auto{background:rgba(10,132,255,.18);color:#0a6fd8}
+ .wrap{overflow-x:auto;-webkit-overflow-scrolling:touch}
+ .wrap>table{width:max-content;min-width:100%}
 </style>`;
 
+// 最後に届いてからどれくらい経ったか。自動送信が止まったらここで気づける
+function ago(at) {
+  const m = Math.floor((Date.now() - at) / 60000);
+  if (m < 60) return { t: m + '分前', ok: true };
+  const h = Math.floor(m / 60);
+  if (h < 48) return { t: h + '時間前', ok: h < 30 };
+  return { t: Math.floor(h / 24) + '日前', ok: false };
+}
+
 async function adminList(env, key) {
-  const list = await env.REPORTS.list({ prefix: 'r:', limit: 200 });
+  const K = k => `key=${encodeURIComponent(key)}`;
+  const devs = await env.REPORTS.list({ prefix: 'd:', limit: 100 });
+  const latest = (await Promise.all(devs.keys.map(async k => {
+    const v = await env.REPORTS.get(k.name);
+    return v ? Object.assign(JSON.parse(v), { device: k.name.slice(2) }) : null;
+  }))).filter(Boolean).sort((a, b) => (b.at || 0) - (a.at || 0));
+
+  const cards = latest.map(d => {
+    const a = ago(d.at || 0);
+    const s = d.scale;
+    return `<div class="card">
+      <h2>端末 ${esc(d.device.slice(0, 8))}
+        <span class="${a.ok ? 'fresh' : 'stale'}" style="font-size:12px">● ${esc(a.t)}</span></h2>
+      <div class="sub" style="margin:0">${esc(jst(d.at || 0))} ／ ${esc(d.version || '-')}${d.auto ? ' ／ 自動' : ''}</div>
+      ${s ? `<div class="kpi">
+        <div>従業員<b>${s.emps}</b></div>
+        <div>勤怠<b>${s.recs}</b></div>
+        <div>のべ出勤<b>${s.att}</b></div>
+        <div>請求書<b>${s.logs}</b></div>
+        <div>最新の勤怠<b style="font-size:15px">${esc(s.last || '-')}</b></div>
+      </div>` : '<div class="sub" style="margin:8px 0 0">実データなし（記録だけ）</div>'}
+      <p style="margin:12px 0 0">
+        <a href="/admin/view?${K()}&id=${encodeURIComponent(d.id)}">最新のレポートを読む</a>
+        ${s ? ` ・ <a href="/admin/data?${K()}&id=${encodeURIComponent(d.dataId || d.id)}">データを見る</a>` : ''}
+      </p></div>`;
+  }).join('');
+
+  const list = await env.REPORTS.list({ prefix: 'r:', limit: 300 });
   const rows = list.keys
     .map(k => ({ id: k.name.slice(2), m: k.metadata || {} }))
     .sort((a, b) => (b.m.at || 0) - (a.m.at || 0));
 
-  const body = rows.length ? `
-  <table>
-    <tr><th>受信</th><th>版</th><th>要望・困りごと</th><th>実データ</th><th></th></tr>
+  const body = rows.length ? `<div class="wrap"><table>
+    <tr><th>受信</th><th>端末</th><th>版</th><th>要望・困りごと</th><th>実データ</th><th></th></tr>
     ${rows.map(r => `<tr>
-      <td>${esc(jst(r.m.at || 0))}<div style="opacity:.5;font-size:11px">${esc(r.m.region || '')}</div></td>
+      <td>${esc(jst(r.m.at || 0))}${r.m.auto ? ' <span class="tag auto">自動</span>' : ''}
+        <div style="opacity:.5;font-size:11px">${esc(r.m.region || '')}</div></td>
+      <td style="font-size:12px;opacity:.7">${esc(String(r.m.device || '').slice(0, 8))}</td>
       <td>${esc(r.m.version || '-')}</td>
-      <td>${esc(r.m.memo || '')}</td>
-      <td>${r.m.hasData ? '<span class="tag">あり</span>' : ''}</td>
-      <td><a href="/admin/view?key=${encodeURIComponent(key)}&id=${encodeURIComponent(r.id)}">中身</a></td>
+      <td class="memo">${esc(r.m.memo || '')}</td>
+      <td>${r.m.hasData ? `<a href="/admin/data?${K()}&id=${encodeURIComponent(r.id)}">見る</a>` : ''}</td>
+      <td><a href="/admin/view?${K()}&id=${encodeURIComponent(r.id)}">中身</a></td>
     </tr>`).join('')}
-  </table>` : '<div class="empty">まだ届いていません</div>';
+  </table></div>` : '<div class="empty">まだ届いていません</div>';
 
   return html(`${STYLE}<h1>利用レポート</h1>
-    <div class="sub">${rows.length} 件 ／ ${KEEP_DAYS}日で自動削除</div>${body}`);
+    <div class="sub">${latest.length} 台 ／ ${rows.length} 件 ／ ${KEEP_DAYS}日で自動削除</div>
+    ${cards}${body}`);
 }
 
 async function adminView(env, key, id) {
   const raw = await env.REPORTS.get('r:' + id);
   if (!raw) return html(`${STYLE}<div class="empty">見つかりません</div>`, 404);
   const rec = JSON.parse(raw);
-  const dl = rec.data
-    ? `<p><a href="/admin/raw?key=${encodeURIComponent(key)}&id=${encodeURIComponent(id)}">実データ（JSON）を落とす</a></p>`
-    : '';
+  const K = `key=${encodeURIComponent(key)}`;
+  const dl = rec.data ? `<p>
+      <a href="/admin/data?${K}&id=${encodeURIComponent(id)}">データを見る</a> ・
+      <a href="/admin/raw?${K}&id=${encodeURIComponent(id)}">JSONで落とす</a></p>` : '';
   return html(`${STYLE}
-    <a class="back" href="/admin?key=${encodeURIComponent(key)}">← 一覧</a>
-    <h1>${esc(jst(rec.at))}</h1>
-    <div class="sub">${esc(rec.version)} ／ ${esc(rec.ua)}</div>
+    <a class="back" href="/admin?${K}">← 一覧</a>
+    <h1>${esc(jst(rec.at))}${rec.auto ? ' <span class="tag auto">自動</span>' : ''}</h1>
+    <div class="sub">${esc(rec.version)} ／ 端末 ${esc(String(rec.device || '').slice(0, 8))} ／ ${esc(rec.ua)}</div>
     ${dl}
     <pre>${esc(rec.report)}</pre>`);
+}
+
+/* 実データを人が読める形で出す。JSONを落として開かなくても様子が分かるように */
+async function adminData(env, key, id) {
+  const raw = await env.REPORTS.get('r:' + id);
+  if (!raw) return html(`${STYLE}<div class="empty">見つかりません</div>`, 404);
+  const rec = JSON.parse(raw);
+  const d = rec.data;
+  if (!d) return html(`${STYLE}<div class="empty">この回に実データはありません</div>`, 404);
+  const K = `key=${encodeURIComponent(key)}`;
+  const yen = n => '¥' + Math.round(Number(n) || 0).toLocaleString('en-US');
+
+  const emps = Array.isArray(d.employees) ? d.employees : [];
+  const recs = Array.isArray(d.records) ? d.records : [];
+  const byId = new Map(emps.map(e => [e.id, e]));
+
+  // 月ごとに、誰が何日出て請求がいくらになったかをまとめる
+  const months = new Map();
+  recs.forEach(r => {
+    const ym = String(r.date || '').slice(0, 7);
+    if (!ym) return;
+    if (!months.has(ym)) months.set(ym, new Map());
+    const per = months.get(ym);
+    const e = byId.get(r.employeeId);
+    const nm = e ? e.name : '（削除済み）';
+    const cur = per.get(nm) || { att: 0, ot: 0, tr: 0, total: 0 };
+    const day = Number(e && e.dailyWage) || 0, night = Number(e && e.nightWage) || 0;
+    const a = Number(r.attendance) || 0, na = Number(r.nightAttendance) || 0;
+    const oh = a > 0 ? (Number(r.overtimeHours) || 0) : 0;
+    const nh = na > 0 ? (Number(r.nightOvertimeHours) || 0) : 0;
+    const tr = Number(r.transportFee) || 0;
+    const man = Number(r.manualTotal) || 0;
+    const auto = Math.round(day * a) + Math.round(day / 8 * 1.25 * oh)
+      + Math.round(night * na) + Math.round(night / 8 * 1.25 * nh) + Math.round(tr);
+    cur.att += a + na; cur.ot += oh + nh; cur.tr += tr;
+    cur.total += man > 0 ? Math.round(man) : auto;
+    per.set(nm, cur);
+  });
+  const ms = [...months.keys()].sort().reverse().slice(0, 12);
+
+  const s = d.settings || {};
+  const iss = s.issuer || {}, cli = s.client || {}, bank = s.bank || {};
+
+  return html(`${STYLE}
+    <a class="back" href="/admin?${K}">← 一覧</a>
+    <h1>データの中身</h1>
+    <div class="sub">${esc(jst(rec.at))} ／ 端末 ${esc(String(rec.device || '').slice(0, 8))}
+      ／ <a href="/admin/raw?${K}&id=${encodeURIComponent(id)}">JSONで落とす</a></div>
+
+    <div class="card"><h2>設定</h2><div class="wrap"><table>
+      <tr><th>屋号</th><td>${esc(iss.companyName)}</td><th>登録番号</th><td>${esc(iss.invoiceNumber)}</td></tr>
+      <tr><th>請求先</th><td>${esc(cli.companyName)}</td><th>担当</th><td>${esc(cli.contactName)}</td></tr>
+      <tr><th>口座</th><td>${esc(bank.bankName)} ${esc(bank.branchName)} ${esc(bank.accountType)} ${esc(bank.accountNumber)}</td>
+          <th>名義</th><td>${esc(bank.accountHolder)}</td></tr>
+      <tr><th>締め日</th><td>${s.closingDay === 31 ? '月末' : esc(s.closingDay) + '日'}</td>
+          <th>税率・車代</th><td>${esc(s.taxRate)}% ／ ${yen(s.defaultTransportFee)}</td></tr>
+    </table></div></div>
+
+    <div class="card"><h2>従業員 ${emps.length}名</h2><div class="wrap"><table>
+      <tr><th>名前</th><th class="num">日給（請求）</th><th class="num">夜間</th>
+          <th class="num">日給（支払）</th><th class="num">夜間</th><th class="num">単価履歴</th></tr>
+      ${emps.map(e => `<tr><td>${esc(e.name)}</td><td class="num">${yen(e.dailyWage)}</td><td class="num">${yen(e.nightWage)}</td>
+        <td class="num">${e.payWage ? yen(e.payWage) : '-'}</td><td class="num">${e.payNightWage ? yen(e.payNightWage) : '-'}</td>
+        <td class="num">${Array.isArray(e.wageHistory) ? e.wageHistory.length + '件' : '-'}</td></tr>`).join('')}
+    </table></div></div>
+
+    <div class="card"><h2>月ごとの出面と請求</h2>
+      ${ms.length ? ms.map(ym => {
+        const per = months.get(ym);
+        const sum = [...per.values()].reduce((a, v) => a + v.total, 0);
+        return `<div style="margin-bottom:14px"><b>${esc(ym)}</b> 合計 ${yen(sum)}
+          <div class="wrap"><table>
+            <tr><th>名前</th><th class="num">出勤</th><th class="num">残業</th><th class="num">車代</th><th class="num">請求額</th></tr>
+            ${[...per.entries()].sort((a, b) => b[1].total - a[1].total).map(([nm, v]) => `<tr><td>${esc(nm)}</td><td class="num">${v.att}日</td>
+              <td class="num">${v.ot}h</td><td class="num">${yen(v.tr)}</td><td class="num">${yen(v.total)}</td></tr>`).join('')}
+          </table></div></div>`;
+      }).join('') : '<div class="sub">勤怠がありません</div>'}
+    </div>
+
+    <div class="card"><h2>発行した請求書 ${Array.isArray(d.invoiceLog) ? d.invoiceLog.length : 0}件</h2>
+      <div class="wrap"><table>
+      ${(Array.isArray(d.invoiceLog) ? d.invoiceLog : []).slice(-20).reverse()
+        .map(l => `<tr><td>${esc(l.issuedAt || l.date || '')}</td><td>${esc(l.period || '')}</td>
+          <td class="num">${yen(l.total || l.amount || 0)}</td></tr>`).join('') || '<tr><td class="sub">なし</td></tr>'}
+    </table></div></div>`);
 }
 
 async function adminRaw(env, id) {
@@ -221,6 +396,7 @@ export default {
       if (!env.REPORTS) return html(`${STYLE}<div class="empty">KV が未接続です</div>`, 500);
       const id = url.searchParams.get('id') || '';
       if (p === '/admin/view') return adminView(env, key, id);
+      if (p === '/admin/data') return adminData(env, key, id);
       if (p === '/admin/raw') return adminRaw(env, id);
       return adminList(env, key);
     }
