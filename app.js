@@ -3,7 +3,7 @@
    日給管理・請求書 — iPhone単一HTML版（依存ゼロ）
    ネイビー×白 / IndexedDB / A4 2ページPDF
    ============================================================= */
-const APP_VERSION='1.6.4';
+const APP_VERSION='1.7.0';
 
 /* ---------- HTML escape ---------- */
 function esc(s){return String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
@@ -115,6 +115,22 @@ const INPUT_MAX={attendance:3,nightAttendance:3,overtimeHours:24,nightOvertimeHo
   transportFee:100000,manualTotal:10000000};
 const INPUT_LABEL={overtimeHours:'残業時間',nightOvertimeHours:'夜間残業',
   transportFee:'車代',manualTotal:'手入力の合計',attendance:'出勤数',nightAttendance:'夜勤の出勤数'};
+/* 本人への支払単価。未設定なら請求単価と同額として扱う（既存データは従来どおり動く）。
+   元請けへの請求単価と、本人に払う単価は建設業では別物で、差額が親方の取り分になる。 */
+function payRates(emp){
+  if(!emp)return {dailyWage:0,nightWage:0};
+  const d=Number(emp.payWage),n=Number(emp.payNightWage);
+  return {
+    dailyWage:(Number.isFinite(d)&&d>0)?d:(emp.dailyWage||0),
+    nightWage:(Number.isFinite(n)&&n>0)?n:(emp.nightWage||0),
+  };
+}
+/* その日の「本人への支払額」。請求額の計算をそのまま単価だけ差し替えて使う。
+   手入力で固定した合計は元請けへの請求額なので、支払は必ず出面から計算する。 */
+function payTotal(rec,emp){
+  const r={...rec};delete r.manualTotal;
+  return dailyTotal(r,payRates(emp));
+}
 /* 数値の正規化。NaN・Infinity・負値・桁の打ち間違いを計算に持ち込まない。
    入力時のチェックをすり抜けた既存データやバックアップ復元にも効かせる。 */
 function safeNum(v,max){
@@ -255,6 +271,21 @@ function periodReport(emp,start,end){
     totalNightWage:nwage, totalNightOvertimePay:not,
     totalTransportFee:tr,
     grandTotal:wage+ot+nwage+not+tr, records:recs};
+}
+
+/* 期間内の支払額を集計する（従業員へ渡す明細用） */
+function payReport(emp,start,end){
+  const recs=(idx().byEmp.get(emp.id)||[]).filter(r=>r.date>=start&&r.date<=end&&recHasData(r));
+  let att=0,natt=0,wage=0,ot=0,nwage=0,not=0,tr=0;
+  recs.forEach(r=>{
+    const t=payTotal(r,emp);
+    att+=safeNum(r.attendance,INPUT_MAX.attendance);
+    natt+=safeNum(r.nightAttendance,INPUT_MAX.nightAttendance);
+    wage+=t.wage;ot+=t.ot;nwage+=t.nwage;not+=t.not;tr+=t.tr;
+  });
+  return {employeeId:emp.id,totalAttendance:att,totalNightAttendance:natt,
+    totalDailyWage:wage,totalOvertimePay:ot,totalNightWage:nwage,totalNightOvertimePay:not,
+    totalTransportFee:tr,grandTotal:wage+ot+nwage+not+tr,records:recs};
 }
 
 /* ---------- BOOT ---------- */
@@ -1129,6 +1160,8 @@ function openEmpModal(id){
   const emp=id?STATE.employees.find(e=>e.id===id):null;
   $('emp-modal-title').textContent=emp?'従業員を編集':'従業員を追加';
   $('emp-name').value=emp?emp.name:'';
+  $('emp-pay').value=(emp&&emp.payWage)?emp.payWage:'';
+  $('emp-npay').value=(emp&&emp.payNightWage)?emp.payNightWage:'';
   $('emp-wage').value=emp?emp.dailyWage:'';
   $('emp-nwage').value=(emp&&emp.nightWage)?emp.nightWage:'';
   $('emp-delete').style.display=emp?'flex':'none';
@@ -1158,11 +1191,15 @@ $('emp-save').addEventListener('click',()=>{
   if(!Number.isFinite(wage)||wage<=0){toast('⚠️ 日給を正しく入力してください');return;}
   if(wage>WAGE_MAX){toast(`⚠️ 日給は ${WAGE_MAX.toLocaleString('ja-JP')} 円までです。桁を確認してください`);return;}
   if(nwage>WAGE_MAX){toast(`⚠️ 夜間単価は ${WAGE_MAX.toLocaleString('ja-JP')} 円までです。桁を確認してください`);return;}
+  const payRaw=$('emp-pay').value.trim(),npayRaw=$('emp-npay').value.trim();
+  const pay=payRaw===''?0:(parseInt(payRaw,10)||0);
+  const npay=npayRaw===''?0:(parseInt(npayRaw,10)||0);
+  if(pay>WAGE_MAX||npay>WAGE_MAX){toast(`⚠️ 支払単価は ${WAGE_MAX.toLocaleString('ja-JP')} 円までです`);return;}
   if(editEmpId){
     const e=STATE.employees.find(x=>x.id===editEmpId);
-    if(e){e.name=name;e.dailyWage=wage;e.nightWage=nwage;}
+    if(e){e.name=name;e.dailyWage=wage;e.nightWage=nwage;e.payWage=pay;e.payNightWage=npay;}
   }else{
-    const e={id:uid(),name,dailyWage:wage,nightWage:nwage,createdAt:new Date().toISOString()};
+    const e={id:uid(),name,dailyWage:wage,nightWage:nwage,payWage:pay,payNightWage:npay,createdAt:new Date().toISOString()};
     STATE.employees.push(e);selEmp=e.id;
   }
   saveEmployees();closeEmpModal();renderEmpRow();renderAtt();
@@ -1203,6 +1240,10 @@ function renderBill(){
   let subtotal=0; reports.forEach(x=>subtotal+=x.rep.grandTotal);
   const tax=calcTax(subtotal,s.taxRate);
   const total=subtotal+tax;
+  // 本人への支払と、親方の取り分（粗利）
+  const pays=reports.map(({emp})=>({emp,pay:payReport(emp,period.start,period.end)}));
+  let payTotalAll=0; pays.forEach(x=>payTotalAll+=x.pay.grandTotal);
+  const margin=subtotal-payTotalAll;   // 税抜の請求額から支払額を引く
   if(reports.length){
     $('grand-v').innerHTML=yenHTML(lastGrandTotal==null?0:lastGrandTotal);
     animateYen($('grand-v'),total);
@@ -1238,12 +1279,95 @@ function renderBill(){
         ${rep.totalNightAttendance>0||rep.totalNightWage>0?`<span>夜勤 ${rep.totalNightAttendance}日</span><span>夜間 ${yen(rep.totalNightWage)}</span><span>夜残業 ${yen(rep.totalNightOvertimePay)}</span>`:''}
         <span>車代 ${yen(rep.totalTransportFee)}</span>
       </div>
-      <button class="btn btn-navy btn-sm sum-emp-btn" onclick="makeInvoice('${emp.id}')">${ICON_DOC}${esc(emp.name)}の請求書PDF</button>`;
+      ${(()=>{const pr=payReport(emp,period.start,period.end);
+        const diff=rep.grandTotal-pr.grandTotal;
+        return `<div class="pay-row">
+          <span class="pay-l">本人へ支払</span><span class="pay-v">${yen(pr.grandTotal)}</span>
+          ${diff!==0?`<span class="pay-m">取り分 ${yen(diff)}</span>`:''}
+        </div>`;})()}
+      <div class="emp-btns">
+        <button class="btn btn-navy btn-sm" onclick="makeInvoice('${emp.id}')">${ICON_DOC}請求書</button>
+        <button class="btn btn-ghost btn-sm" onclick="makePaySlip('${emp.id}')">支払明細</button>
+      </div>`;
     list.appendChild(div);
   });
+  // 取り分（粗利）のまとめ
+  if(payTotalAll>0){
+    const m=document.createElement('div');m.className='margin-card';
+    m.innerHTML=`<div class="margin-row"><span>元請けへの請求（税抜）</span><b>${yen(subtotal)}</b></div>
+      <div class="margin-row"><span>従業員への支払</span><b>−${yen(payTotalAll)}</b></div>
+      <div class="margin-row total"><span>手元に残る（税抜）</span><b>${yen(margin)}</b></div>`;
+    list.appendChild(m);
+  }
 }
 
 /* ===== PDF ===== */
+/* ---------- 従業員への支払明細 ----------
+   月末の手計算をなくすのが目的。出面から自動で1人分の明細を作る。 */
+function buildPaySlipHTML(emp,rep,period,cssMode){
+  const s=STATE.settings;
+  const css=(cssMode==='screen')?SCREEN_CSS:PRINT_CSS;
+  const rates=payRates(emp);
+  const otRate=overtimeRate(rates.dailyWage), otRateN=overtimeRate(rates.nightWage);
+  const nightOn=rates.nightWage>0&&(rep.totalNightAttendance>0||rep.totalNightOvertimePay>0);
+  const rows=daysInPeriod(period.start,period.end).map(ds=>{
+    const rec=rep.records.find(r=>r.date===ds);
+    if(!rec)return '';
+    const t=payTotal(rec,emp);
+    if(t.total<=0)return '';
+    const d=new Date(ds+'T00:00:00');
+    const lbl=`${d.getMonth()+1}/${d.getDate()}(${WEEK[d.getDay()]})`;
+    const att=safeNum(rec.attendance,INPUT_MAX.attendance);
+    const natt=safeNum(rec.nightAttendance,INPUT_MAX.nightAttendance);
+    const kubun=[att>0?'日勤':'',natt>0?'夜勤':''].filter(Boolean).join('・')||'—';
+    return `<tr><td class="inv-l">${lbl}</td><td class="inv-c">${kubun}</td>
+      <td class="inv-c">${att+natt||'—'}</td><td>${yen(t.wage+t.nwage)}</td>
+      <td>${yen(t.ot+t.not)}</td><td>${yen(t.tr)}</td>
+      <td class="inv-bold">${yen(t.total)}</td></tr>`;
+  }).join('');
+  const totalDays=rep.totalAttendance+rep.totalNightAttendance;
+  return `<style>${css}</style><div class="inv-page">
+    <div class="inv-topbar"></div>
+    <div class="inv-inner">
+      <div class="inv-p1-top">
+        <div><div class="inv-p1-title">支　払　明　細</div><div class="inv-title-en">P A Y M E N T</div></div>
+        <div class="inv-p1-meta">対象期間：${period.label}<br>発行日：<b>${fmtDateJ(ymd(new Date().getFullYear(),new Date().getMonth()+1,new Date().getDate()))}</b></div>
+      </div>
+      <div class="inv-parties">
+        <div><div class="inv-client-name">${esc(emp.name)}　殿</div></div>
+        <div class="inv-p1-issuer"><div class="inv-p1-issuer-name">${esc(s.issuer.companyName||'')}</div>
+          <div class="inv-p1-issuer-detail">${esc(s.issuer.address||'')}<br>${s.issuer.phone?'TEL：'+esc(s.issuer.phone):''}</div></div>
+      </div>
+      <div class="inv-amount-row">
+        <span class="inv-total-label">お 支 払 額</span>
+        <span><span class="inv-total-amount">${yen(rep.grandTotal)}</span>
+        <span class="inv-total-sub">出勤 ${totalDays}日</span></span>
+      </div>
+      <div class="inv-subject"><span>単価</span>日給 ${yen(rates.dailyWage)}／残業 ${yen(Math.round(otRate))}/h${nightOn?`　夜間 ${yen(rates.nightWage)}／夜残業 ${yen(Math.round(otRateN))}/h`:''}</div>
+      <table class="inv-detail">
+        <thead><tr><th class="inv-l">日付</th><th class="inv-c">区分</th><th class="inv-c">出勤</th><th>人工代</th><th>残業代</th><th>車代</th><th>計</th></tr></thead>
+        <tbody>${rows}
+          <tr class="inv-total-row"><td class="inv-l">合計</td><td></td><td class="inv-c">${totalDays}</td>
+            <td>${yen(rep.totalDailyWage+rep.totalNightWage)}</td>
+            <td>${yen(rep.totalOvertimePay+rep.totalNightOvertimePay)}</td>
+            <td>${yen(rep.totalTransportFee)}</td><td>${yen(rep.grandTotal)}</td></tr>
+        </tbody>
+      </table>
+      <div class="inv-p1-foot"><span>${esc(s.issuer.companyName||'')}</span><span>支払明細</span></div>
+    </div>
+  </div>`;
+}
+function makePaySlip(empId){
+  const emp=STATE.employees.find(e=>e.id===empId);if(!emp)return;
+  const period=billingPeriod(billY,billM,STATE.settings.closingDay);
+  const rep=payReport(emp,period.start,period.end);
+  if(rep.grandTotal<=0){toast('⚠️ この期間の出面がありません');return;}
+  showPreview(buildPaySlipHTML(emp,rep,period,'screen'),
+              buildPaySlipHTML(emp,rep,period,'print'),
+              null,false,`${emp.name}さんの支払明細`);
+}
+window.makePaySlip=makePaySlip;
+
 /* ---------- 発行（電子帳簿保存法）---------- */
 /* 発行時点の内容をスナップショットとして保存する。あとで勤怠を直しても
    発行済みの請求書の内容は変わらない（これが電帳法上も正しい挙動）。 */
@@ -1345,7 +1469,8 @@ $('batch-pdf-btn').addEventListener('click',()=>{
   );
 });
 
-function showPreview(screenHTML,printHTML,issue,alreadyLogged){
+function showPreview(screenHTML,printHTML,issue,alreadyLogged,title){
+  $('pv-title').textContent=title||'請求書プレビュー';
   $('pv-scroll').innerHTML=screenHTML;   // 画面用（幅フィット）
   $('print-root').innerHTML=printHTML;   // 印刷用（A4原寸）
   pendingIssue=issue||null;
