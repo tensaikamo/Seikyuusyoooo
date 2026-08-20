@@ -3,7 +3,19 @@
    日給管理・請求書 — iPhone単一HTML版（依存ゼロ）
    ネイビー×白 / IndexedDB / A4 2ページPDF
    ============================================================= */
-const APP_VERSION='1.9.0';
+const APP_VERSION='1.9.1';
+
+/* ---------- レポートの既定の送信先 ----------
+   ここに入れておくと、端末ごとに設定しなくても自動送信が働く。
+   使う人が設定画面で書き換えたらそちらが優先され、以後ここは上書きしない。
+   合言葉は認証ではなく荒らし避け。これが漏れても届くのはレポートだけで、
+   受け取ったものを読むための鍵（ADMIN_KEY）とは別物。 */
+const DEFAULT_REPORT={
+  url:'',        // 例 https://seikyuusyo-reports.＊＊＊.workers.dev/report
+  key:'',
+  auto:true,     // 送信先が入っていれば既定で自動送信する
+  autoData:false // 実データは既定では送らない（直すだけなら要らない）
+};
 
 /* ---------- HTML escape ---------- */
 function esc(s){return String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
@@ -33,7 +45,7 @@ let STATE={
   invoiceLog:[],     // 発行履歴（電子帳簿保存法）。追記のみ・削除しない
   usageLog:[],       // 利用の記録
   // レポートの送信先と自動送信の設定。バックアップにもレポート本文にも含めない
-  reportDest:{url:'',key:'',auto:false,autoData:false,lastAt:0,lastSig:'',device:''},
+  reportDest:{url:'',key:'',auto:false,autoData:false,touched:false,lastAt:0,lastSig:'',device:''},
   ready:false
 };
 let viewY=new Date().getFullYear(), viewM=new Date().getMonth()+1; // 1-12
@@ -369,8 +381,18 @@ async function boot(){
     if(dest&&typeof dest==='object')STATE.reportDest={
       url:String(dest.url||''),key:String(dest.key||''),
       auto:!!dest.auto,autoData:!!dest.autoData,
+      touched:!!dest.touched,
       lastAt:Number(dest.lastAt)||0,lastSig:String(dest.lastSig||''),
       device:String(dest.device||'')};
+    // 使う人が自分で書き換えていなければ、アプリに埋め込んだ送信先を使う。
+    // こうしておくと、あとで送信先を変えてもアプリの更新だけで行き渡る。
+    if(!STATE.reportDest.touched){
+      STATE.reportDest.url=DEFAULT_REPORT.url;
+      STATE.reportDest.key=DEFAULT_REPORT.key;
+      // 送信先が埋め込まれていないうちは自動送信をONに見せない
+      STATE.reportDest.auto=!!DEFAULT_REPORT.url&&DEFAULT_REPORT.auto;
+      STATE.reportDest.autoData=DEFAULT_REPORT.autoData;
+    }
     if(!ready) await migrate();
   }catch(e){toast('⚠️ データ読込エラー');}
   invalidateIdx();
@@ -2125,6 +2147,7 @@ function loadReportDest(){
     d.url=u.value.trim();d.key=k.value.trim();
     if(a)d.auto=a.checked;
     if(ad)d.autoData=ad.checked;
+    d.touched=true;   // 以後は埋め込みの既定値で上書きしない
     saveDest();repStatus('');renderAutoState();
   };
   u.addEventListener('input',save);k.addEventListener('input',save);
