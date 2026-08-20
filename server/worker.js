@@ -6,7 +6,7 @@
  *
  * できること
  *   POST /report          アプリからレポートを受け取って保存する
- *   GET  /admin?key=xxx   受け取った一覧を見る（開発者だけ）
+ *   GET  /admin           管理キーでログインして一覧を見る（開発者だけ）
  *   GET  /admin/view?id=  1件の中身を見る
  *   GET  /admin/raw?id=   1件を JSON で落とす
  *
@@ -32,16 +32,30 @@ function cors(env, extra) {
     'Access-Control-Max-Age': '86400'
   }, extra || {});
 }
+function originAllowed(request, env) {
+  const allowed = String(env.ALLOW_ORIGIN || '*').trim();
+  if (!allowed || allowed === '*') return true;
+  return request.headers.get('Origin') === allowed;
+}
 function json(obj, status, headers) {
   return new Response(JSON.stringify(obj), {
     status: status || 200,
     headers: Object.assign({ 'Content-Type': 'application/json; charset=utf-8' }, headers || {})
   });
 }
-function html(body, status) {
+function securityHeaders(extra) {
+  return Object.assign({
+    'Cache-Control': 'no-store',
+    'Content-Security-Policy': "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'",
+    'Referrer-Policy': 'no-referrer',
+    'X-Content-Type-Options': 'nosniff',
+    'X-Frame-Options': 'DENY'
+  }, extra || {});
+}
+function html(body, status, headers) {
   return new Response(body, {
     status: status || 200,
-    headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' }
+    headers: securityHeaders(Object.assign({ 'Content-Type': 'text/html; charset=utf-8' }, headers || {}))
   });
 }
 function esc(s) {
@@ -52,9 +66,8 @@ function esc(s) {
 // 長さの違いで中身を推測されないよう、一定時間で比べる
 function safeEqual(a, b) {
   const x = enc.encode(String(a || '')), y = enc.encode(String(b || ''));
-  if (x.length !== y.length) return false;
-  let d = 0;
-  for (let i = 0; i < x.length; i++) d |= x[i] ^ y[i];
+  let d = x.length ^ y.length;
+  for (let i = 0, n = Math.max(x.length, y.length); i < n; i++) d |= (x[i] || 0) ^ (y[i] || 0);
   return d === 0;
 }
 async function hash(s) {
@@ -148,12 +161,18 @@ async function ingest(request, env) {
   return json({ ok: true, id }, 200, cors(env));
 }
 
+function canonicalRecords(records) {
+  const byDay = new Map();
+  (Array.isArray(records) ? records : []).forEach(r => byDay.set(`${r && r.employeeId}|${r && r.date}`, r));
+  return [...byDay.values()];
+}
+
 // 実データが付いていたら規模だけ取り出す。一覧で中身を開かずに様子が分かるように
 function summarize(data) {
   if (!data || typeof data !== 'object') return null;
   try {
     const emps = Array.isArray(data.employees) ? data.employees : [];
-    const recs = Array.isArray(data.records) ? data.records : [];
+    const recs = canonicalRecords(data.records);
     let att = 0, last = '';
     recs.forEach(r => {
       att += (Number(r.attendance) || 0) + (Number(r.nightAttendance) || 0);
@@ -211,8 +230,7 @@ function ago(at) {
   return { t: Math.floor(h / 24) + '日前', ok: false };
 }
 
-async function adminList(env, key) {
-  const K = k => `key=${encodeURIComponent(key)}`;
+async function adminList(env) {
   const devs = await env.REPORTS.list({ prefix: 'd:', limit: 100 });
   const latest = (await Promise.all(devs.keys.map(async k => {
     const v = await env.REPORTS.get(k.name);
@@ -234,8 +252,8 @@ async function adminList(env, key) {
         <div>最新の勤怠<b style="font-size:15px">${esc(s.last || '-')}</b></div>
       </div>` : '<div class="sub" style="margin:8px 0 0">実データなし（記録だけ）</div>'}
       <p style="margin:12px 0 0">
-        <a href="/admin/view?${K()}&id=${encodeURIComponent(d.id)}">最新のレポートを読む</a>
-        ${s ? ` ・ <a href="/admin/data?${K()}&id=${encodeURIComponent(d.dataId || d.id)}">データを見る</a>` : ''}
+        <a href="/admin/view?id=${encodeURIComponent(d.id)}">最新のレポートを読む</a>
+        ${s ? ` ・ <a href="/admin/data?id=${encodeURIComponent(d.dataId || d.id)}">データを見る</a>` : ''}
       </p></div>`;
   }).join('');
 
@@ -252,8 +270,8 @@ async function adminList(env, key) {
       <td style="font-size:12px;opacity:.7">${esc(String(r.m.device || '').slice(0, 8))}</td>
       <td>${esc(r.m.version || '-')}</td>
       <td class="memo">${esc(r.m.memo || '')}</td>
-      <td>${r.m.hasData ? `<a href="/admin/data?${K()}&id=${encodeURIComponent(r.id)}">見る</a>` : ''}</td>
-      <td><a href="/admin/view?${K()}&id=${encodeURIComponent(r.id)}">中身</a></td>
+      <td>${r.m.hasData ? `<a href="/admin/data?id=${encodeURIComponent(r.id)}">見る</a>` : ''}</td>
+      <td><a href="/admin/view?id=${encodeURIComponent(r.id)}">中身</a></td>
     </tr>`).join('')}
   </table></div>` : '<div class="empty">まだ届いていません</div>';
 
@@ -262,16 +280,15 @@ async function adminList(env, key) {
     ${cards}${body}`);
 }
 
-async function adminView(env, key, id) {
+async function adminView(env, id) {
   const raw = await env.REPORTS.get('r:' + id);
   if (!raw) return html(`${STYLE}<div class="empty">見つかりません</div>`, 404);
   const rec = JSON.parse(raw);
-  const K = `key=${encodeURIComponent(key)}`;
   const dl = rec.data ? `<p>
-      <a href="/admin/data?${K}&id=${encodeURIComponent(id)}">データを見る</a> ・
-      <a href="/admin/raw?${K}&id=${encodeURIComponent(id)}">JSONで落とす</a></p>` : '';
+      <a href="/admin/data?id=${encodeURIComponent(id)}">データを見る</a> ・
+      <a href="/admin/raw?id=${encodeURIComponent(id)}">JSONで落とす</a></p>` : '';
   return html(`${STYLE}
-    <a class="back" href="/admin?${K}">← 一覧</a>
+    <a class="back" href="/admin">← 一覧</a>
     <h1>${esc(jst(rec.at))}${rec.auto ? ' <span class="tag auto">自動</span>' : ''}</h1>
     <div class="sub">${esc(rec.version)} ／ 端末 ${esc(String(rec.device || '').slice(0, 8))} ／ ${esc(rec.ua)}</div>
     ${dl}
@@ -279,17 +296,16 @@ async function adminView(env, key, id) {
 }
 
 /* 実データを人が読める形で出す。JSONを落として開かなくても様子が分かるように */
-async function adminData(env, key, id) {
+async function adminData(env, id) {
   const raw = await env.REPORTS.get('r:' + id);
   if (!raw) return html(`${STYLE}<div class="empty">見つかりません</div>`, 404);
   const rec = JSON.parse(raw);
   const d = rec.data;
   if (!d) return html(`${STYLE}<div class="empty">この回に実データはありません</div>`, 404);
-  const K = `key=${encodeURIComponent(key)}`;
   const yen = n => '¥' + Math.round(Number(n) || 0).toLocaleString('en-US');
 
   const emps = Array.isArray(d.employees) ? d.employees : [];
-  const recs = Array.isArray(d.records) ? d.records : [];
+  const recs = canonicalRecords(d.records);
   const byId = new Map(emps.map(e => [e.id, e]));
 
   // 月ごとに、誰が何日出て請求がいくらになったかをまとめる
@@ -320,10 +336,10 @@ async function adminData(env, key, id) {
   const iss = s.issuer || {}, cli = s.client || {}, bank = s.bank || {};
 
   return html(`${STYLE}
-    <a class="back" href="/admin?${K}">← 一覧</a>
+    <a class="back" href="/admin">← 一覧</a>
     <h1>データの中身</h1>
     <div class="sub">${esc(jst(rec.at))} ／ 端末 ${esc(String(rec.device || '').slice(0, 8))}
-      ／ <a href="/admin/raw?${K}&id=${encodeURIComponent(id)}">JSONで落とす</a></div>
+      ／ <a href="/admin/raw?id=${encodeURIComponent(id)}">JSONで落とす</a></div>
 
     <div class="card"><h2>設定</h2><div class="wrap"><table>
       <tr><th>屋号</th><td>${esc(iss.companyName)}</td><th>登録番号</th><td>${esc(iss.invoiceNumber)}</td></tr>
@@ -368,12 +384,34 @@ async function adminRaw(env, id) {
   if (!raw) return json({ error: 'not found' }, 404);
   const rec = JSON.parse(raw);
   return new Response(JSON.stringify(rec.data || {}, null, 2), {
-    headers: {
+    headers: securityHeaders({
       'Content-Type': 'application/json; charset=utf-8',
-      'Content-Disposition': `attachment; filename="report-${id}.json"`,
-      'Cache-Control': 'no-store'
-    }
+      'Content-Disposition': `attachment; filename="report-${id}.json"`
+    })
   });
+}
+
+const ADMIN_COOKIE = 'invoice_admin';
+function adminCookie(request) {
+  const raw = request.headers.get('Cookie') || '';
+  const found = raw.split(';').map(x => x.trim()).find(x => x.startsWith(ADMIN_COOKIE + '='));
+  if (!found) return '';
+  try { return decodeURIComponent(found.slice(ADMIN_COOKIE.length + 1)); } catch (e) { return ''; }
+}
+function adminSession(key, location) {
+  return new Response(null, { status: 303, headers: securityHeaders({
+    'Location': location,
+    'Set-Cookie': `${ADMIN_COOKIE}=${encodeURIComponent(key)}; Path=/admin; Max-Age=28800; HttpOnly; Secure; SameSite=Strict`
+  }) });
+}
+function adminLogin(message) {
+  return html(`${STYLE}<h1>管理画面</h1>${message ? `<div class="sub">${esc(message)}</div>` : ''}
+    <form method="post" action="/admin/login" class="card">
+      <label for="key">管理キー</label><br>
+      <input id="key" name="key" type="password" autocomplete="current-password" required
+        style="font:inherit;padding:8px;width:min(420px,90%);margin:8px 0">
+      <button type="submit" style="font:inherit;padding:8px 14px">ログイン</button>
+    </form>`, 401);
 }
 
 export default {
@@ -381,9 +419,13 @@ export default {
     const url = new URL(request.url);
     const p = url.pathname.replace(/\/+$/, '') || '/';
 
-    if (request.method === 'OPTIONS') return new Response(null, { status: 204, headers: cors(env) });
+    if (request.method === 'OPTIONS') {
+      if (!originAllowed(request, env)) return new Response('Forbidden', { status: 403 });
+      return new Response(null, { status: 204, headers: cors(env) });
+    }
 
     if (p === '/report' && request.method === 'POST') {
+      if (!originAllowed(request, env)) return json({ ok: false, error: 'bad origin' }, 403, cors(env));
       if (!env.REPORTS) return json({ ok: false, error: 'KV not bound' }, 500, cors(env));
       try { return await ingest(request, env); }
       catch (e) { return json({ ok: false, error: String(e && e.message || e) }, 500, cors(env)); }
@@ -391,14 +433,22 @@ export default {
 
     if (p.startsWith('/admin')) {
       if (!env.ADMIN_KEY) return html(`${STYLE}<div class="empty">ADMIN_KEY が未設定です</div>`, 500);
-      const key = url.searchParams.get('key') || '';
-      if (!safeEqual(key, env.ADMIN_KEY)) return new Response('Not found', { status: 404 });
+      if (p === '/admin/login' && request.method === 'POST') {
+        const form = await request.formData(), key = String(form.get('key') || '');
+        return safeEqual(key, env.ADMIN_KEY) ? adminSession(key, '/admin') : adminLogin('管理キーが違います');
+      }
+      const queryKey = url.searchParams.get('key') || '';
+      if (queryKey && safeEqual(queryKey, env.ADMIN_KEY)) {
+        url.searchParams.delete('key');
+        return adminSession(queryKey, url.pathname + (url.search ? url.search : ''));
+      }
+      if (!safeEqual(adminCookie(request), env.ADMIN_KEY)) return adminLogin('管理キーを入力してください');
       if (!env.REPORTS) return html(`${STYLE}<div class="empty">KV が未接続です</div>`, 500);
       const id = url.searchParams.get('id') || '';
-      if (p === '/admin/view') return adminView(env, key, id);
-      if (p === '/admin/data') return adminData(env, key, id);
+      if (p === '/admin/view') return adminView(env, id);
+      if (p === '/admin/data') return adminData(env, id);
       if (p === '/admin/raw') return adminRaw(env, id);
-      return adminList(env, key);
+      return adminList(env);
     }
 
     if (p === '/health') return json({ ok: true, kv: !!env.REPORTS });
