@@ -3,7 +3,7 @@
    日給管理・請求書 — iPhone単一HTML版（依存ゼロ）
    ネイビー×白 / IndexedDB / A4 2ページPDF
    ============================================================= */
-const APP_VERSION='1.7.0';
+const APP_VERSION='1.7.1';
 
 /* ---------- HTML escape ---------- */
 function esc(s){return String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
@@ -115,21 +115,35 @@ const INPUT_MAX={attendance:3,nightAttendance:3,overtimeHours:24,nightOvertimeHo
   transportFee:100000,manualTotal:10000000};
 const INPUT_LABEL={overtimeHours:'残業時間',nightOvertimeHours:'夜間残業',
   transportFee:'車代',manualTotal:'手入力の合計',attendance:'出勤数',nightAttendance:'夜勤の出勤数'};
+/* その日に有効だった単価を返す。
+   単価を上げたときに過去の月の金額まで書き換わってしまう問題への対策で、
+   emp.wageHistory に「いつからの単価か」を残す。履歴が無ければ従来どおり現在の単価を使う。 */
+function ratesOn(emp,date){
+  const h=(emp&&Array.isArray(emp.wageHistory))?emp.wageHistory:null;
+  if(!h||!h.length)return emp||{};
+  let best=null;
+  h.forEach(w=>{if(w.from<=date&&(!best||w.from>best.from))best=w;});
+  if(best)return best;
+  return h.reduce((a,b)=>a.from<b.from?a:b);   // すべて未来日なら一番古い単価を使う
+}
 /* 本人への支払単価。未設定なら請求単価と同額として扱う（既存データは従来どおり動く）。
    元請けへの請求単価と、本人に払う単価は建設業では別物で、差額が親方の取り分になる。 */
-function payRates(emp){
-  if(!emp)return {dailyWage:0,nightWage:0};
-  const d=Number(emp.payWage),n=Number(emp.payNightWage);
+function payRates(emp,date){
+  const r=ratesOn(emp,date||'9999-12-31');
+  if(!r)return {dailyWage:0,nightWage:0};
+  const d=Number(r.payWage),n=Number(r.payNightWage);
   return {
-    dailyWage:(Number.isFinite(d)&&d>0)?d:(emp.dailyWage||0),
-    nightWage:(Number.isFinite(n)&&n>0)?n:(emp.nightWage||0),
+    dailyWage:(Number.isFinite(d)&&d>0)?d:(r.dailyWage||0),
+    nightWage:(Number.isFinite(n)&&n>0)?n:(r.nightWage||0),
   };
 }
 /* その日の「本人への支払額」。請求額の計算をそのまま単価だけ差し替えて使う。
    手入力で固定した合計は元請けへの請求額なので、支払は必ず出面から計算する。 */
 function payTotal(rec,emp){
-  const r={...rec};delete r.manualTotal;
-  return dailyTotal(r,payRates(emp));
+  const r={...rec};
+  delete r.manualTotal;           // 手入力の固定額は元請けへの請求額なので支払には使わない
+  if(!r.transportToWorker)r.transportFee=0;  // 車代は基本渡さない。渡した日だけ含める
+  return dailyTotal(r,payRates(emp,rec.date));
 }
 /* 数値の正規化。NaN・Infinity・負値・桁の打ち間違いを計算に持ち込まない。
    入力時のチェックをすり抜けた既存データやバックアップ復元にも効かせる。 */
@@ -141,8 +155,9 @@ function safeNum(v,max){
 const WAGE_MAX=1000000;
 function dailyTotal(rec,emp){
   // 後方互換: 第2引数に数値(dailyWage)が渡された場合も動くようにする
-  const dayWage=safeNum((typeof emp==='number')?emp:(emp&&emp.dailyWage),WAGE_MAX);
-  const nightWage=safeNum((typeof emp==='number')?0:(emp&&emp.nightWage),WAGE_MAX);
+  const src=(typeof emp==='number')?emp:ratesOn(emp,(rec&&rec.date)||'9999-12-31');
+  const dayWage=safeNum((typeof src==='number')?src:(src&&src.dailyWage),WAGE_MAX);
+  const nightWage=safeNum((typeof src==='number')?0:(src&&src.nightWage),WAGE_MAX);
   // 日勤。残業はその区分に出勤がある日だけ計上する
   // （「休」にしても残業hが残っていると課金されていた不具合の対策）
   const att=safeNum(rec.attendance,INPUT_MAX.attendance), natt=safeNum(rec.nightAttendance,INPUT_MAX.nightAttendance);
@@ -893,6 +908,7 @@ function dayControlsHTML(ds,rec,emp){
           <div class="att-mini"><label>残業h</label><input type="number" inputmode="decimal" min="0" max="24" step="0.5" value="${rec.overtimeHours||''}" placeholder="0" onchange="setAtt('${ds}','overtimeHours',this.value)"></div>
           <div class="att-mini"><label>車代</label><input type="number" inputmode="numeric" min="0" max="100000" step="1" value="${rec.transportFee||''}" placeholder="0" onchange="setAtt('${ds}','transportFee',this.value)"></div>
         </div>
+        ${(rec.transportFee||0)>0?`<button class="tr-give${rec.transportToWorker?' on':''}" onclick="toggleTrGive('${ds}')">${rec.transportToWorker?'✓ 車代を本人に渡した':'車代を本人に渡す'}</button>`:''}
         ${showNight?`
         <div class="night-sec">
           <div class="shift-label night">夜勤</div>
@@ -1097,6 +1113,17 @@ function toggleNight(ds){
   if(daySheetDate)renderDaySheet();
 }
 window.toggleNight=toggleNight;
+/* 車代を本人に渡したかどうか。基本は渡さないので、渡した日だけ印を付ける */
+function toggleTrGive(ds){
+  if(!selEmp)return;
+  const rec=STATE.records.find(r=>r.employeeId===selEmp&&r.date===ds);
+  if(!rec)return;
+  rec.transportToWorker=!rec.transportToWorker;
+  saveRecords();haptic();
+  refreshDay(ds,'attendance');
+  if(daySheetDate)renderDaySheet();
+}
+window.toggleTrGive=toggleTrGive;
 function toggleManual(ds){
   const k=xk(ds);if(manualExpanded.has(k))manualExpanded.delete(k);else manualExpanded.add(k);
   haptic();
@@ -1197,7 +1224,35 @@ $('emp-save').addEventListener('click',()=>{
   if(pay>WAGE_MAX||npay>WAGE_MAX){toast(`⚠️ 支払単価は ${WAGE_MAX.toLocaleString('ja-JP')} 円までです`);return;}
   if(editEmpId){
     const e=STATE.employees.find(x=>x.id===editEmpId);
-    if(e){e.name=name;e.dailyWage=wage;e.nightWage=nwage;e.payWage=pay;e.payNightWage=npay;}
+    if(e){
+      const changed=(e.dailyWage!==wage||e.nightWage!==nwage||e.payWage!==pay||e.payNightWage!==npay);
+      const hasData=(idx().byEmp.get(e.id)||[]).some(recHasData);
+      if(changed&&hasData){
+        // 単価を変えると過去の月の金額まで書き換わってしまうため、適用開始日を選ばせる
+        const per=billingPeriod(billY,billM,STATE.settings.closingDay);
+        const md=d=>`${+d.slice(5,7)}月${+d.slice(8,10)}日`;
+        const applyAll=confirm(
+          `${e.name} の単価を変更します。\n\n`+
+          `【OK】過去の勤怠にも新しい単価を適用する\n`+
+          `　　　入力ミスの訂正はこちら。過去の請求額も変わります。\n\n`+
+          `【キャンセル】${md(per.start)}以降の勤怠から新しい単価にする\n`+
+          `　　　値上げはこちら。過去の金額は変わりません。`);
+        if(!applyAll){
+          // これまでの単価を「その日まで」の履歴として残し、新単価を期首から適用する
+          if(!Array.isArray(e.wageHistory)||!e.wageHistory.length){
+            e.wageHistory=[{from:'0000-01-01',dailyWage:e.dailyWage,nightWage:e.nightWage,
+              payWage:e.payWage||0,payNightWage:e.payNightWage||0}];
+          }
+          e.wageHistory=e.wageHistory.filter(w=>w.from!==per.start);
+          e.wageHistory.push({from:per.start,dailyWage:wage,nightWage:nwage,payWage:pay,payNightWage:npay});
+          e.wageHistory.sort((a,b)=>a.from<b.from?-1:1);
+          toast(`${md(per.start)}以降の単価を変更しました`);
+        }else{
+          e.wageHistory=null;   // 全期間を新しい単価で計算する
+        }
+      }
+      e.name=name;e.dailyWage=wage;e.nightWage=nwage;e.payWage=pay;e.payNightWage=npay;
+    }
   }else{
     const e={id:uid(),name,dailyWage:wage,nightWage:nwage,payWage:pay,payNightWage:npay,createdAt:new Date().toISOString()};
     STATE.employees.push(e);selEmp=e.id;
@@ -1292,8 +1347,14 @@ function renderBill(){
     list.appendChild(div);
   });
   // 取り分（粗利）のまとめ
+  if(margin<0){
+    const w=document.createElement('div');w.className='warn-card';
+    w.innerHTML=`<b>支払のほうが請求より多くなっています</b><br>
+      この期間は ${yen(-margin)} の持ち出しです。支払単価が請求単価を上回っていないか確認してください。`;
+    list.appendChild(w);
+  }
   if(payTotalAll>0){
-    const m=document.createElement('div');m.className='margin-card';
+    const m=document.createElement('div');m.className='margin-card'+(margin<0?' minus':'');
     m.innerHTML=`<div class="margin-row"><span>元請けへの請求（税抜）</span><b>${yen(subtotal)}</b></div>
       <div class="margin-row"><span>従業員への支払</span><b>−${yen(payTotalAll)}</b></div>
       <div class="margin-row total"><span>手元に残る（税抜）</span><b>${yen(margin)}</b></div>`;
