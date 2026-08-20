@@ -25,11 +25,30 @@
 ## 置くもの
 
 - `worker.js` … サーバー本体（これ1ファイルだけ）
-- `wrangler.toml` … CLI で入れる人向けの設定
+- `wrangler.jsonc` … 設定。KV の id は自動で書き換えられるので触らなくてよい
 
-## 入れ方（ブラウザだけ・約5分）
+## 入れ方その1：ボタン1つ（iPhone でもできる・おすすめ）
 
-CLI もビルドもいらない。スマホからでもできる。
+Cloudflare の「Deploy to Cloudflare」を使うと、**コードを貼り付けずに**入る。
+Worker の作成・KV の作成・接続まで全部やってくれる。
+
+```
+https://deploy.workers.cloudflare.com/?url=https://github.com/tensaikamo/Seikyuusyoooo/tree/main/server
+```
+
+1. 上のリンクを開く（Cloudflare のアカウントが要る。無料・カード不要）
+2. リポジトリの複製先を聞かれるので、そのまま進む
+3. **Create and deploy** を押す。KV は自動で作られて接続される
+4. 終わったら Worker の **Settings → Variables and Secrets** で秘密を2つ入れる
+   （下の表のとおり。`ALLOW_ORIGIN` は設定ファイルに入っているので不要）
+5. **Deploy** し直す
+
+iPhone の Cloudflare のコード編集画面は貼り付けがまともに動かないので、
+スマホしかないならこちらを使う。
+
+## 入れ方その2：手で貼る（パソコン向け・約5分）
+
+CLI もビルドもいらない。
 
 1. https://dash.cloudflare.com/ でアカウントを作る（無料・カード不要）
 2. 左メニュー **Storage & Databases → KV** →「Create namespace」
@@ -67,7 +86,7 @@ CLI もビルドもいらない。スマホからでもできる。
 ```sh
 npm i -g wrangler
 wrangler login
-wrangler kv namespace create reports      # 出た id を wrangler.toml に書く
+wrangler kv namespace create reports      # 出た id を wrangler.jsonc に書く
 wrangler secret put ADMIN_KEY
 wrangler secret put INGEST_KEY
 wrangler deploy

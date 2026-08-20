@@ -1,0 +1,24 @@
+{
+  // 「Deploy to Cloudflare」ボタンはこの設定を読んで、
+  // KV 名前空間を自動で作り、下の id を本物に書き換えてくれる。
+  // id はそのための置き場所なので、この値のままでよい。
+  "name": "seikyuusyo-reports",
+  "main": "worker.js",
+  "compatibility_date": "2025-01-01",
+  "observability": { "enabled": true },
+
+  "kv_namespaces": [
+    {
+      "binding": "REPORTS",
+      "id": "00000000000000000000000000000000"
+    }
+  ],
+
+  "vars": {
+    // アプリを置いてあるサイト。ここからの送信だけを許す
+    "ALLOW_ORIGIN": "https://tensaikamo.github.io"
+  }
+
+  // ADMIN_KEY と INGEST_KEY は秘密なので、ここには書かない。
+  // デプロイしたあと Cloudflare の画面で Secret として入れる。
+}
