@@ -199,7 +199,8 @@ svg.ic{fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;strok
 .card-t{font-size:var(--fs-xs);font-weight:800;letter-spacing:.08em;color:var(--mut);text-transform:uppercase;margin-bottom:12px;display:flex;align-items:center;gap:7px;}
 .card-t::before{content:'';width:3px;height:13px;background:linear-gradient(180deg in oklab,var(--amber),var(--amber-d));border-radius:2px;}
 label.fl{display:block;font-size:var(--fs-sm);font-weight:700;color:var(--sub);margin-bottom:6px;}
-input[type=text],input[type=number],input[type=tel],input[type=date],select,textarea{
+input[type=text],input[type=number],input[type=tel],input[type=date],
+input[type=url],input[type=password],input[type=email],select,textarea{
   width:100%;padding:11px 13px;background:#f6f8fb;border:1px solid var(--line-2);border-radius:var(--r-sm);
   outline:none;transition:border-color var(--dur-1),background var(--dur-1),box-shadow var(--dur-1);min-height:46px;-webkit-appearance:none;appearance:none;
 }
@@ -441,6 +442,18 @@ textarea:focus{border-color:var(--navy-3);background:#fff;}
   font-size:.66rem;line-height:1.65;color:var(--sub);max-height:210px;overflow:auto;
   white-space:pre-wrap;word-break:break-all;margin-bottom:12px;
   font-family:ui-monospace,SFMono-Regular,Menlo,monospace;-webkit-overflow-scrolling:touch;}
+.rep-status{font-size:var(--fs-xs);color:var(--sub);margin-top:8px;line-height:1.5;min-height:1em;}
+.rep-status.ok{color:var(--navy-3);font-weight:700;}
+.rep-status.ng{color:var(--danger);font-weight:700;}
+.rep-adv{margin-top:14px;border-top:1px solid var(--line);padding-top:10px;}
+.rep-adv>summary{font-size:var(--fs-xs);font-weight:800;color:var(--mut);letter-spacing:.04em;
+  cursor:pointer;list-style:none;padding:4px 0;-webkit-tap-highlight-color:transparent;}
+.rep-adv>summary::-webkit-details-marker{display:none;}
+.rep-adv>summary::after{content:'▾';margin-left:6px;display:inline-block;transition:transform .2s;}
+.rep-adv[open]>summary::after{transform:rotate(180deg);}
+.rep-adv-body{padding-top:6px;}
+.rep-adv-body input{margin-bottom:10px;}
+.rep-adv-body .btn{margin-top:2px;}
 .closing-hint{font-size:var(--fs-xs);color:var(--sub);margin-top:6px;line-height:1.5;}
 .data-btns{display:flex;flex-direction:column;gap:9px;}
 /* ===== 発行履歴（電子帳簿保存法） ===== */
@@ -689,6 +702,20 @@ textarea:focus{border-color:var(--navy-3);background:#fff;}
         <div class="rep-title">送られる内容</div>
         <pre class="rep-preview" id="rep-preview"></pre>
         <button class="btn btn-navy" id="rep-send" type="button">この内容を送る</button>
+        <div class="rep-status" id="rep-status"></div>
+        <details class="rep-adv">
+          <summary>送信先の設定</summary>
+          <div class="rep-adv-body">
+            <div class="ebook-note">ここを空にしておくと、送信ボタンでファイルを書き出して
+              LINEやメールで渡すかたちになります。送信先を入れると直接届きます。</div>
+            <label class="fl">送信先アドレス</label>
+            <input id="rep-url" type="url" inputmode="url" autocomplete="off"
+              autocapitalize="off" spellcheck="false" placeholder="https://＊＊＊.workers.dev/report">
+            <label class="fl">合言葉</label>
+            <input id="rep-key" type="password" autocomplete="off" placeholder="（開発者から聞いたもの）">
+            <button class="btn btn-ghost btn-sm" id="rep-test" type="button">つながるか試す</button>
+          </div>
+        </details>
       </div>
       <!-- 情報 -->
       <div class="card">

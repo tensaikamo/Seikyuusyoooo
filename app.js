@@ -3,7 +3,7 @@
    日給管理・請求書 — iPhone単一HTML版（依存ゼロ）
    ネイビー×白 / IndexedDB / A4 2ページPDF
    ============================================================= */
-const APP_VERSION='1.8.0';
+const APP_VERSION='1.8.1';
 
 /* ---------- HTML escape ---------- */
 function esc(s){return String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
@@ -32,6 +32,7 @@ let STATE={
   settings:JSON.parse(JSON.stringify(DEFAULT_SETTINGS)),
   invoiceLog:[],     // 発行履歴（電子帳簿保存法）。追記のみ・削除しない
   usageLog:[],       // 利用の記録（端末内のみ。送信は本人の操作で行う）
+  reportDest:{url:'',key:''}, // レポートの送信先。バックアップにも送信内容にも含めない
   ready:false
 };
 let viewY=new Date().getFullYear(), viewM=new Date().getMonth()+1; // 1-12
@@ -338,6 +339,8 @@ async function boot(){
     if(Array.isArray(ilog))STATE.invoiceLog=ilog;
     const ulog=await idbGet('usageLog');
     if(Array.isArray(ulog))STATE.usageLog=ulog;
+    const dest=await idbGet('reportDest');
+    if(dest&&typeof dest==='object')STATE.reportDest={url:String(dest.url||''),key:String(dest.key||'')};
     if(!ready) await migrate();
   }catch(e){toast('⚠️ データ読込エラー');}
   invalidateIdx();
@@ -364,6 +367,7 @@ async function boot(){
   $('ver').textContent=APP_VERSION;
   buildClosingOptions();
   loadSettingsForm();
+  loadReportDest();
   if(STATE.employees.length) selEmp=STATE.employees[0].id;
   // ロゴの描画アニメーションを見せてから閉じる。待ちたくない人はタップで飛ばせる
   const sp=$('splash');
@@ -2005,10 +2009,94 @@ function renderReportPreview(){
   }
   box.textContent=txt;
 }
+/* 送信先（サーバー）。設定とは分けて持つ。
+   合言葉をバックアップやレポート本文に混ぜないための分離。 */
+function loadReportDest(){
+  const u=$('rep-url'),k=$('rep-key');if(!u||!k)return;
+  u.value=STATE.reportDest.url;k.value=STATE.reportDest.key;
+  const save=()=>{
+    STATE.reportDest={url:u.value.trim(),key:k.value.trim()};
+    idbSet('reportDest',STATE.reportDest);
+    repStatus('');
+  };
+  u.addEventListener('input',save);k.addEventListener('input',save);
+  const t=$('rep-test');
+  if(t)t.addEventListener('click',testReportDest);
+}
+function repStatus(msg,cls){
+  const el=$('rep-status');if(!el)return;
+  el.textContent=msg||'';el.className='rep-status'+(cls?' '+cls:'');
+}
+// 送信先が使える形かを先に確かめる。http:// のまま貼られると中身が丸見えになる
+function destOrNull(){
+  const d=STATE.reportDest||{};
+  const raw=(d.url||'').trim();
+  if(!raw)return null;
+  let u;
+  try{u=new URL(raw);}catch(e){return {bad:'アドレスの形が正しくありません'};}
+  if(u.protocol!=='https:')return {bad:'https:// で始まるアドレスにしてください'};
+  return {url:u.href,key:(d.key||'').trim()};
+}
+async function testReportDest(){
+  const d=destOrNull();
+  if(!d)return repStatus('送信先が空です','ng');
+  if(d.bad)return repStatus('⚠️ '+d.bad,'ng');
+  repStatus('確認中…');
+  try{
+    const res=await postReport(d,{report:'■ 接続テスト\n送信先の確認だけです。',
+      version:APP_VERSION,ua:navigator.userAgent,memo:'（接続テスト）'});
+    if(res.ok)repStatus('✓ つながりました。テストが1件届いています','ok');
+    else repStatus('⚠️ '+res.msg,'ng');
+  }catch(e){repStatus('⚠️ '+(e&&e.message||'つながりませんでした'),'ng');}
+}
+async function postReport(dest,payload){
+  const ctl=('AbortController'in window)?new AbortController():null;
+  const timer=ctl?setTimeout(()=>ctl.abort(),15000):null;
+  try{
+    // 合言葉は本文に入れる。HTTPヘッダは英数字しか通せず、
+    // 日本語を打たれると fetch 自体が例外になって原因が分からなくなるため。
+    const res=await fetch(dest.url,{
+      method:'POST',mode:'cors',cache:'no-store',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify(dest.key?Object.assign({key:dest.key},payload):payload),
+      signal:ctl?ctl.signal:undefined
+    });
+    if(res.ok)return {ok:true};
+    if(res.status===401)return {ok:false,msg:'合言葉が違います'};
+    if(res.status===413)return {ok:false,msg:'データが大きすぎます'};
+    if(res.status===429)return {ok:false,msg:'送りすぎです。少し時間をおいてください'};
+    return {ok:false,msg:`送信先が ${res.status} を返しました`};
+  }catch(e){
+    if(e&&e.name==='AbortError')return {ok:false,msg:'時間内に返事がありませんでした'};
+    return {ok:false,msg:'つながりませんでした（電波と送信先を確認してください）'};
+  }finally{ if(timer)clearTimeout(timer); }
+}
 async function sendReport(){
   const inc=$('rep-include')&&$('rep-include').checked;
   if(inc&&!confirm('従業員の氏名・給与額・取引先・銀行口座を含むデータを書き出します。\n\nこの内容を開発者に渡してよいか、従業員の方の了解は取れていますか？\n\nOKで書き出します。'))return;
   const r=buildReport(inc);
+  const memo=($('rep-memo')&&$('rep-memo').value.trim())||'';
+
+  // 送信先が入っていれば直接送る。入っていない・失敗したときはファイルに書き出す
+  const d=destOrNull();
+  if(d&&d.bad){repStatus('⚠️ '+d.bad,'ng');toast('⚠️ '+d.bad);return;}
+  if(d){
+    const btn=$('rep-send');
+    if(btn){btn.disabled=true;btn.textContent='送信中…';}
+    repStatus('送信中…');
+    const res=await postReport(d,{report:r.report,data:inc?r.data:null,
+      version:APP_VERSION,ua:navigator.userAgent,memo});
+    if(btn){btn.disabled=false;btn.textContent='この内容を送る';}
+    if(res.ok){
+      repStatus('✓ 送信しました。ありがとうございます','ok');
+      logUse('レポート送信',inc?'実データあり':'記録のみ');saveUsage();
+      toast('送信しました');
+      if($('rep-memo')){$('rep-memo').value='';renderReportPreview();}
+      return;
+    }
+    repStatus('⚠️ '+res.msg+'。ファイルに書き出します','ng');
+  }
+
   const name=`利用レポート_${ymd(new Date().getFullYear(),new Date().getMonth()+1,new Date().getDate()).replace(/-/g,'')}`;
   const files=[new File([r.report],name+'.txt',{type:'text/plain'})];
   if(inc)files.push(new File([JSON.stringify(r.data,null,2)],name+'_データ.json',{type:'application/json'}));
