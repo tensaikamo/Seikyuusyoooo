@@ -11,8 +11,8 @@ const APP_VERSION='1.9.1';
    合言葉は認証ではなく荒らし避け。これが漏れても届くのはレポートだけで、
    受け取ったものを読むための鍵（ADMIN_KEY）とは別物。 */
 const DEFAULT_REPORT={
-  url:'',        // 例 https://seikyuusyo-reports.＊＊＊.workers.dev/report
-  key:'',
+  url:'https://seikyuusyo-reports.hi-vv1vv-0213.workers.dev/report',
+  key:'98ec011f86b391560a3031944cd594b8952bc6cf2496d625',
   auto:true,     // 送信先が入っていれば既定で自動送信する
   autoData:false // 実データは既定では送らない（直すだけなら要らない）
 };
