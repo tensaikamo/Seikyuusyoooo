@@ -1,7 +1,7 @@
 {
   "name": "日給管理・請求書",
   "short_name": "請求書",
-  "description": "日給制の勤怠管理と請求書発行。インボイス対応・A4 2ページPDF。",
+  "description": "日給制の勤怠管理と請求書発行。インボイス対応・A4印刷/PDF保存。",
   "lang": "ja",
   "start_url": "./index.html",
   "scope": "./",

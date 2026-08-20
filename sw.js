@@ -4,7 +4,7 @@
 // 以前は全部キャッシュ優先だったため、新しい版を公開しても端末が取りに行かず
 // 更新されないままになっていた。オフライン時だけキャッシュを使う。
 // 画像アイコンは変化しないのでキャッシュ優先のままにする。
-const CACHE='invoice-v20';
+const CACHE='invoice-v22';
 const SHELL=['./','./index.html','./app.js','./manifest.json','./icon-180.png','./icon-192.png','./icon-512.png','./icon-512-maskable.png'];
 
 self.addEventListener('install',e=>{
@@ -12,7 +12,7 @@ self.addEventListener('install',e=>{
 });
 self.addEventListener('activate',e=>{
   e.waitUntil(caches.keys()
-    .then(ks=>Promise.all(ks.filter(k=>k!==CACHE).map(k=>caches.delete(k))))
+    .then(ks=>Promise.all(ks.filter(k=>k.startsWith('invoice-')&&k!==CACHE).map(k=>caches.delete(k))))
     .then(()=>self.clients.claim()));
 });
 // ページ側から「待たずに切り替えて」と言われたら即座に有効化する
