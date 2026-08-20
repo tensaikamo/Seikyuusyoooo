@@ -3,7 +3,7 @@
    日給管理・請求書 — iPhone単一HTML版（依存ゼロ）
    ネイビー×白 / IndexedDB / A4 2ページPDF
    ============================================================= */
-const APP_VERSION='1.9.1';
+const APP_VERSION='1.9.2';
 
 /* ---------- レポートの既定の送信先 ----------
    ここに入れておくと、端末ごとに設定しなくても自動送信が働く。
@@ -1330,7 +1330,12 @@ $('emp-save').addEventListener('click',()=>{
   if(editEmpId){
     const e=STATE.employees.find(x=>x.id===editEmpId);
     if(e){
-      const changed=(e.dailyWage!==wage||e.nightWage!==nwage||e.payWage!==pay||e.payNightWage!==npay);
+      // 古いデータは payWage が未設定（undefined）で、空欄は 0 になる。
+      // そのまま比べると「触っていないのに変更あり」と判定され、
+      // 確認ダイアログが出て余計な単価履歴まで作られていた。
+      const n0=v=>Number(v)||0;
+      const changed=(n0(e.dailyWage)!==n0(wage)||n0(e.nightWage)!==n0(nwage)||
+                     n0(e.payWage)!==n0(pay)||n0(e.payNightWage)!==n0(npay));
       const hasData=(idx().byEmp.get(e.id)||[]).some(recHasData);
       if(changed&&hasData){
         // 単価を変えると過去の月の金額まで書き換わってしまうため、適用開始日を選ばせる
@@ -1348,7 +1353,10 @@ $('emp-save').addEventListener('click',()=>{
             e.wageHistory=[{from:'0000-01-01',dailyWage:e.dailyWage,nightWage:e.nightWage,
               payWage:e.payWage||0,payNightWage:e.payNightWage||0}];
           }
-          e.wageHistory=e.wageHistory.filter(w=>w.from!==per.start);
+          // その日以降を新しい単価にするので、それより後の履歴は消す。
+          // 残すと「設定画面に出ている単価」と「実際に計算に使う単価」がずれ、
+          // 画面は19,000なのに請求書は20,000、という食い違いが起きていた。
+          e.wageHistory=e.wageHistory.filter(w=>w.from<per.start);
           e.wageHistory.push({from:per.start,dailyWage:wage,nightWage:nwage,payWage:pay,payNightWage:npay});
           e.wageHistory.sort((a,b)=>a.from<b.from?-1:1);
           toast(`${md(per.start)}以降の単価を変更しました`);
@@ -1473,7 +1481,11 @@ function renderBill(){
 function buildPaySlipHTML(emp,rep,period,cssMode){
   const s=STATE.settings;
   const css=(cssMode==='screen')?SCREEN_CSS:PRINT_CSS;
-  const rates=payRates(emp);
+  // 明細の各行はその日の単価で計算している。ヘッダだけ最新単価を出していたため、
+  // 期の途中で単価を変えるとヘッダと中身が食い違っていた。期末時点の単価に合わせる。
+  const rates=payRates(emp,period.end);
+  const startRates=payRates(emp,period.start);
+  const rateChanged=(startRates.dailyWage!==rates.dailyWage||startRates.nightWage!==rates.nightWage);
   const otRate=overtimeRate(rates.dailyWage), otRateN=overtimeRate(rates.nightWage);
   const nightOn=rates.nightWage>0&&(rep.totalNightAttendance>0||rep.totalNightOvertimePay>0);
   const rows=daysInPeriod(period.start,period.end).map(ds=>{
@@ -1509,7 +1521,7 @@ function buildPaySlipHTML(emp,rep,period,cssMode){
         <span><span class="inv-total-amount">${yen(rep.grandTotal)}</span>
         <span class="inv-total-sub">出勤 ${totalDays}日</span></span>
       </div>
-      <div class="inv-subject"><span>単価</span>日給 ${yen(rates.dailyWage)}／残業 ${yen(Math.round(otRate))}/h${nightOn?`　夜間 ${yen(rates.nightWage)}／夜残業 ${yen(Math.round(otRateN))}/h`:''}</div>
+      <div class="inv-subject"><span>単価</span>日給 ${yen(rates.dailyWage)}／残業 ${yen(Math.round(otRate))}/h${nightOn?`　夜間 ${yen(rates.nightWage)}／夜残業 ${yen(Math.round(otRateN))}/h`:''}${rateChanged?`（期間中に変更あり／期首 日給 ${yen(startRates.dailyWage)}）`:''}</div>
       <table class="inv-detail">
         <thead><tr><th class="inv-l">日付</th><th class="inv-c">区分</th><th class="inv-c">出勤</th><th>人工代</th><th>残業代</th><th>車代</th><th>計</th></tr></thead>
         <tbody>${rows}
