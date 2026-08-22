@@ -680,6 +680,9 @@ textarea:focus{border-color:var(--navy-3);background:#fff;}
           <div><label class="fl">消費税率</label><select id="set-tax"><option value="10">10%</option><option value="8">8%</option><option value="0">なし（0%）</option></select></div>
           <div><label class="fl">締め日</label><select id="set-closing"></select><div class="closing-hint" id="closing-hint"></div></div>
         </div>
+        <div class="field"><label class="fl">1日の所定労働時間（時間）<span style="color:var(--mut);font-weight:400;">／残業単価の計算に使います</span></label>
+          <input type="number" id="set-workh" inputmode="decimal" min="1" max="24" step="0.5" placeholder="8">
+          <div class="closing-hint" id="workh-hint"></div></div>
         <div class="field"><label class="fl">車代の初期値（円）</label><input type="number" id="set-transport" inputmode="numeric" min="0" max="100000" step="1" placeholder="1000"></div>
         <div class="field"><label class="fl">月間の売上目標（円）<span style="color:var(--mut);font-weight:400;">／空欄なら直近3ヶ月の平均</span></label><input type="number" id="set-goal" inputmode="numeric" placeholder="例：500000"></div>
       </div>

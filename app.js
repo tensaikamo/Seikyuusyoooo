@@ -3,7 +3,7 @@
    日給管理・請求書 — iPhone単一HTML版（依存ゼロ）
    ネイビー×白 / IndexedDB / A4 2ページPDF
    ============================================================= */
-const APP_VERSION='1.11.0';
+const APP_VERSION='1.12.0';
 
 /* ---------- レポートの既定の送信先 ----------
    ここに入れておくと、端末ごとに設定しなくても自動送信が働く。
@@ -34,6 +34,10 @@ function uid(){return Date.now().toString(36)+Math.random().toString(36).slice(2
 const WEEK=['日','月','火','水','木','金','土'];
 const DEFAULT_SETTINGS={
   defaultTransportFee:1000,taxRate:10,closingDay:31,monthlyGoal:0,
+  // 1日の所定労働時間。残業単価の基礎（日給÷所定時間）に使う。
+  // 労基則19条は「日給÷1日の所定労働時間数」と定めており、8は定数ではない。
+  // 7.5時間なのに8で割ると残業単価が低くなり、支払が法定を下回る。
+  workHours:8,
   issuer:{companyName:'',postalCode:'',address:'',phone:'',invoiceNumber:''},
   client:{companyName:'',postalCode:'',address:'',contactName:''},
   bank:{bankName:'',branchName:'',accountType:'普通',accountNumber:'',accountHolder:''}
@@ -194,7 +198,14 @@ function ymd(y,m,d){return `${y}-${pad2(m)}-${pad2(d)}`;}
 function fmtDateJ(s){const d=new Date(s+'T00:00:00');return `${d.getFullYear()}年${d.getMonth()+1}月${d.getDate()}日`;}
 
 /* ---------- calculations（元アプリと同一ロジック）---------- */
-function overtimeRate(wage){return wage/8*1.25;}
+/* 残業単価 = 日給 ÷ 1日の所定労働時間 × 1.25。
+   所定時間は設定から取る。以前は 8 を直に書いていたが、
+   所定が7.5時間の職場では残業単価が実際より低くなっていた。 */
+function workHours(){
+  const h=Number(STATE&&STATE.settings&&STATE.settings.workHours);
+  return (Number.isFinite(h)&&h>0&&h<=24)?h:8;
+}
+function overtimeRate(wage){return wage/workHours()*1.25;}
 
 /* 単価の桁の打ち間違いを止める。
    上限100万円だけを見ていたため、18,000 を 180,000 と打っても素通りし、
@@ -1376,8 +1387,9 @@ function updateEmpHint(){
   const w=parseInt($('emp-wage').value,10)||0;
   const nw=parseInt($('emp-nwage').value,10)||0;
   let lines=[];
-  if(w>0) lines.push(`日勤残業 = ${yen(w)} ÷ 8 × 1.25 = ${yen(Math.round(overtimeRate(w)))}/h`);
-  if(nw>0) lines.push(`夜勤残業 = ${yen(nw)} ÷ 8 × 1.25 = ${yen(Math.round(overtimeRate(nw)))}/h`);
+  const H=workHours();
+  if(w>0) lines.push(`日勤残業 = ${yen(w)} ÷ ${H} × 1.25 = ${yen(Math.round(overtimeRate(w)))}/h`);
+  if(nw>0) lines.push(`夜勤残業 = ${yen(nw)} ÷ ${H} × 1.25 = ${yen(Math.round(overtimeRate(nw)))}/h`);
   $('emp-ot-hint').innerHTML=lines.join('<br>');
 }
 $('emp-save').addEventListener('click',()=>{
@@ -2078,7 +2090,17 @@ function loadSettingsForm(){
   const cd=String(s.closingDay);
   $('set-closing').value=[...$('set-closing').options].some(o=>o.value===cd)?cd:'31';
   $('set-transport').value=s.defaultTransportFee;$('set-goal').value=s.monthlyGoal||'';
-  updateClosingHint();
+  $('set-workh').value=s.workHours||8;
+  updateClosingHint();updateWorkhHint();
+}
+/* 所定労働時間を変えると残業単価が変わる。何がどう変わるかを画面に出しておく */
+function updateWorkhHint(){
+  const el=$('workh-hint');if(!el)return;
+  const H=workHours();
+  const w=(STATE.employees[0]&&STATE.employees[0].dailyWage)||18000;
+  el.innerHTML=`残業単価 = 日給 ÷ ${H} × 1.25`+
+    `（日給 ${yen(w)} なら ${yen(Math.round(overtimeRate(w)))}/h）`+
+    (H===8?'':'<br>※ 発行済みの請求書は変わりませんが、まだ発行していない月の残業代は変わります');
 }
 function bindSettings(){
   const m=[
@@ -2092,6 +2114,11 @@ function bindSettings(){
     ['bk-holder',v=>STATE.settings.bank.accountHolder=v],
     ['set-tax',v=>STATE.settings.taxRate=parseInt(v,10)||0],
     ['set-closing',v=>{STATE.settings.closingDay=parseInt(v,10)||31;updateClosingHint();}],
+    ['set-workh',v=>{
+      const h=parseFloat(v);
+      STATE.settings.workHours=(Number.isFinite(h)&&h>0&&h<=24)?h:8;
+      updateWorkhHint();attDirty=true;dashDirty=true;
+    }],
     ['set-transport',v=>STATE.settings.defaultTransportFee=parseInt(v,10)||0],
     ['set-goal',v=>STATE.settings.monthlyGoal=parseInt(v,10)||0],
   ];
