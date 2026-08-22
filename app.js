@@ -3,7 +3,7 @@
    日給管理・請求書 — iPhone単一HTML版（依存ゼロ）
    ネイビー×白 / IndexedDB / A4 2ページPDF
    ============================================================= */
-const APP_VERSION='1.10.0';
+const APP_VERSION='1.10.1';
 
 /* ---------- レポートの既定の送信先 ----------
    ここに入れておくと、端末ごとに設定しなくても自動送信が働く。
@@ -1232,6 +1232,13 @@ function setAtt(date,field,value){
     }
   }
   if(field==='manualTotal'&&v===0)manualExpanded.delete(xk(date));
+  // 出勤の入っていない日に金額を入れたら、その場で知らせる。
+  // 入力欄は出勤の有無に関係なく出ているので、隣の行に打ち間違えても気づけなかった。
+  if((field==='transportFee'||field==='manualTotal')&&v>0&&
+     safeNum(rec.attendance,INPUT_MAX.attendance)===0&&
+     safeNum(rec.nightAttendance,INPUT_MAX.nightAttendance)===0){
+    toast('⚠️ この日は出勤が入っていません。日付を確かめてください');
+  }
   // どの欄を何度も打ち直しているかを見る（入れた数字そのものは記録しない）
   noteEdit(date,INPUT_LABEL[field]||field);
   if(v>0){
@@ -2464,10 +2471,17 @@ function dataIssues(){
     chk('overtimeHours','残業時間',INPUT_MAX.overtimeHours);
     chk('nightOvertimeHours','夜間残業',INPUT_MAX.nightOvertimeHours);
     chk('manualTotal','手入力の合計',INPUT_MAX.manualTotal);
+    // 出勤も夜勤も無い日に金額がついている＝隣の行に打ち間違えた可能性が高い。
+    // 現場に出ていないのに車代だけ出る日は実務では無い、という前提で異常として拾う。
+    if(emp&&safeNum(r.attendance,INPUT_MAX.attendance)===0&&
+       safeNum(r.nightAttendance,INPUT_MAX.nightAttendance)===0&&
+       dailyTotal(r,emp).total>0){
+      const key=nm+'|出勤なしの金額|noatt';cnt[key]=(cnt[key]||0)+1;
+    }
     if(!emp)cnt[nm+'|所属なし']=(cnt[nm+'|所属なし']||0)+1;
   });
   Object.entries(cnt).forEach(([k,n])=>{
-    const [who,what]=k.split('|');out.push({who,what,days:n});
+    const [who,what,kind]=k.split('|');out.push({who,what,days:n,kind:kind||'over'});
   });
   return out;
 }
@@ -2476,12 +2490,22 @@ function renderDataHealth(){
   const iss=dataIssues();
   if(!iss.length){box.innerHTML='';box.style.display='none';return;}
   box.style.display='block';
-  box.innerHTML=`<div class="warn-card"><b>入力値に異常があります</b><br>
-    ${iss.map(i=>i.days
+  // 種類ごとに文章を変える。以前は全部「上限を超えた日が◯日」に流し込んでいたため、
+  // 「出勤が無いのに金額がついている」が上限を超えた、という意味の通らない文になっていた。
+  const noAtt=iss.filter(i=>i.kind==='noatt');
+  const other=iss.filter(i=>i.kind!=='noatt');
+  const parts=[];
+  if(other.length)parts.push(`<div class="warn-card"><b>入力値に異常があります</b><br>
+    ${other.map(i=>i.days
       ? `${esc(i.who)} の「${esc(i.what)}」が上限を超えた日が ${i.days} 日あります`
       : `${esc(i.who)} の「${esc(i.what)}」が ${yen(i.val)}（上限 ${yen(i.max)}）です`).join('<br>')}
     <br>桁の打ち間違いの可能性があります。金額は安全な値に丸めて計算していますが、
-    正しい値に直してください。</div>`;
+    正しい値に直してください。</div>`);
+  if(noAtt.length)parts.push(`<div class="warn-card"><b>出勤の無い日に金額がついています</b><br>
+    ${noAtt.map(i=>`${esc(i.who)} に ${i.days} 日あります`).join('<br>')}
+    <br>日付を打ち間違えた可能性があります。そのままだと請求額に入ります。
+    勤怠タブで、出勤を入れるか金額を0にしてください。</div>`);
+  box.innerHTML=parts.join('');
 }
 
 /* ---------- 発行履歴（電子帳簿保存法）---------- */
