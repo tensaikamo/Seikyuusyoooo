@@ -3,7 +3,7 @@
    日給管理・請求書 — iPhone単一HTML版（依存ゼロ）
    ネイビー×白 / IndexedDB / A4 2ページPDF
    ============================================================= */
-const APP_VERSION='1.10.1';
+const APP_VERSION='1.11.0';
 
 /* ---------- レポートの既定の送信先 ----------
    ここに入れておくと、端末ごとに設定しなくても自動送信が働く。
@@ -1031,7 +1031,9 @@ function dayControlsHTML(ds,rec,emp){
   // 画面から消えたうえ 0円で計算され、請求金額が過少になっていた。
   const showNight=hasNight||(nightEnabled&&nightExpanded.has(xk(ds)));
   const nightNoRate=hasNight&&!nightEnabled;
-  const attOpts=[0.5,1,1.5,2];
+  // 1日に2人工はありえない。1人工を超えた分は残業として入れる。
+  // 以前は 1.5 と 2 を選べたため、日給の2倍が割増なしで計上できてしまった。
+  const attOpts=[0.5,1];
   return `
         <div class="shift-label">日勤</div>
         <div class="att-btns">
@@ -2478,6 +2480,13 @@ function dataIssues(){
        dailyTotal(r,emp).total>0){
       const key=nm+'|出勤なしの金額|noatt';cnt[key]=(cnt[key]||0)+1;
     }
+    // 1日に1人工を超える出勤はありえない（超えた分は残業で入れる）。
+    // 以前は 1.5 と 2 を選べたため、日給の2倍が割増なしで計上された記録が残りうる。
+    // 過去の請求額を勝手に書き換えないよう、計算はそのままにして知らせるだけにする。
+    if(emp&&(safeNum(r.attendance,INPUT_MAX.attendance)>1||
+             safeNum(r.nightAttendance,INPUT_MAX.nightAttendance)>1)){
+      const key=nm+'|1人工超え|overatt';cnt[key]=(cnt[key]||0)+1;
+    }
     if(!emp)cnt[nm+'|所属なし']=(cnt[nm+'|所属なし']||0)+1;
   });
   Object.entries(cnt).forEach(([k,n])=>{
@@ -2493,7 +2502,8 @@ function renderDataHealth(){
   // 種類ごとに文章を変える。以前は全部「上限を超えた日が◯日」に流し込んでいたため、
   // 「出勤が無いのに金額がついている」が上限を超えた、という意味の通らない文になっていた。
   const noAtt=iss.filter(i=>i.kind==='noatt');
-  const other=iss.filter(i=>i.kind!=='noatt');
+  const overAtt=iss.filter(i=>i.kind==='overatt');
+  const other=iss.filter(i=>i.kind!=='noatt'&&i.kind!=='overatt');
   const parts=[];
   if(other.length)parts.push(`<div class="warn-card"><b>入力値に異常があります</b><br>
     ${other.map(i=>i.days
@@ -2505,6 +2515,11 @@ function renderDataHealth(){
     ${noAtt.map(i=>`${esc(i.who)} に ${i.days} 日あります`).join('<br>')}
     <br>日付を打ち間違えた可能性があります。そのままだと請求額に入ります。
     勤怠タブで、出勤を入れるか金額を0にしてください。</div>`);
+  if(overAtt.length)parts.push(`<div class="warn-card"><b>1日に1人工を超えた記録があります</b><br>
+    ${overAtt.map(i=>`${esc(i.who)} に ${i.days} 日あります`).join('<br>')}
+    <br>1日は1人工までで、超えた分は残業時間で入れます。
+    以前のアプリでは 1.5 や 2 を選べたため、その分に残業の割増がついていません。
+    金額はそのままにしてあります。直す場合は勤怠タブで入れ直してください。</div>`);
   box.innerHTML=parts.join('');
 }
 
