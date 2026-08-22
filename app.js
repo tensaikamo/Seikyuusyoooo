@@ -3,7 +3,7 @@
    日給管理・請求書 — iPhone単一HTML版（依存ゼロ）
    ネイビー×白 / IndexedDB / A4 2ページPDF
    ============================================================= */
-const APP_VERSION='1.9.2';
+const APP_VERSION='1.10.0';
 
 /* ---------- レポートの既定の送信先 ----------
    ここに入れておくと、端末ごとに設定しなくても自動送信が働く。
@@ -77,11 +77,39 @@ function idx(){
   return _idx;
 }
 
-const saveEmployees=()=>{invalidateIdx();return idbSet('employees',STATE.employees);};
-const saveRecords=()=>{invalidateIdx();return idbSet('records',STATE.records);};
-const saveSettings=()=>{dashDirty=true;attDirty=true;return idbSet('settings',STATE.settings);};
-const saveInvoiceLog=()=>idbSet('invoiceLog',STATE.invoiceLog);
-const saveReady=()=>idbSet('ready',STATE.ready);
+/* ---------- 保存の失敗を必ず知らせる ----------
+   以前は保存が失敗しても画面の数字は更新されたままで、警告も出なかった。
+   端末の空きが尽きると「入れたのに翌朝には消えている」が起きる。
+   一度でも失敗したら、消えるまで画面上部に警告を出し続ける。 */
+let saveBroken=false;
+function saveFailed(what,err){
+  saveBroken=true;
+  try{logUse('保存失敗',what+' / '+(err&&err.name||err));}catch(e){}
+  const bar=$('save-alert');
+  if(bar){
+    bar.textContent='⚠️ 保存できていません。端末の空き容量を確認してください。'+
+      'この状態で入力を続けると、閉じたときに消えます。';
+    bar.classList.add('show');
+  }
+  try{toast('⚠️ 保存できませんでした');}catch(e){}
+}
+// 保存が通ったら警告を消す（空きを空けて復帰した場合）
+function saveOK(){
+  if(!saveBroken)return;
+  saveBroken=false;
+  const bar=$('save-alert');if(bar)bar.classList.remove('show');
+}
+/* 失敗しても投げ返さない。呼び出し側は誰も catch していないので、
+   投げると未処理の拒否が積み上がるだけで、画面の警告以上のことは起きない。
+   成否は真偽値で返し、確かめたい所（復元など）だけが見る。 */
+function guard(what,p){
+  return Promise.resolve(p).then(()=>{saveOK();return true;},e=>{saveFailed(what,e);return false;});
+}
+const saveEmployees=()=>{invalidateIdx();return guard('従業員',idbSet('employees',STATE.employees));};
+const saveRecords=()=>{invalidateIdx();return guard('勤怠',idbSet('records',STATE.records));};
+const saveSettings=()=>{dashDirty=true;attDirty=true;return guard('設定',idbSet('settings',STATE.settings));};
+const saveInvoiceLog=()=>guard('発行履歴',idbSet('invoiceLog',STATE.invoiceLog));
+const saveReady=()=>guard('初期化',idbSet('ready',STATE.ready));
 
 /* ---------- 利用の記録 ----------
    端末の中だけに貯める。送信は本人が設定タブでボタンを押したときだけ行う。
@@ -167,6 +195,23 @@ function fmtDateJ(s){const d=new Date(s+'T00:00:00');return `${d.getFullYear()}�
 
 /* ---------- calculations（元アプリと同一ロジック）---------- */
 function overtimeRate(wage){return wage/8*1.25;}
+
+/* 単価の桁の打ち間違いを止める。
+   上限100万円だけを見ていたため、18,000 を 180,000 と打っても素通りし、
+   月の請求が10倍になっても誰も気づかなかった。
+   下限は最低賃金。北海道は2025年10月から時給1,075円、2026年10月から1,131円の予定。
+   地域や改定で変わるので「止める」のではなく「確認させる」。 */
+const WAGE_SANE_MAX=60000;   // 1日6万円を超える日給はまず打ち間違い
+const MIN_HOURLY=1075;       // 時給換算の目安（北海道・2025年10月〜）
+function wageLooksSane(label,wage){
+  if(wage>WAGE_SANE_MAX)
+    return confirm(`${label}が ${yen(wage)} になっています。\n桁を間違えていませんか？\n\nこのままでよければOKを押してください。`);
+  const hourly=Math.round(wage/8);
+  if(hourly<MIN_HOURLY)
+    return confirm(`${label} ${yen(wage)} は、8時間で割ると時給 ${yen(hourly)} です。\n`+
+      `最低賃金（目安 ${yen(MIN_HOURLY)}）を下回っている可能性があります。\n\nこのままでよければOKを押してください。`);
+  return true;
+}
 /** 1日の合計。日勤(昼)＋夜勤(夜)＋車代。
  *  emp.dailyWage … 日勤の日給 / emp.nightWage … 夜勤の夜間単価（未設定なら0）
  *  rec.attendance/overtimeHours … 日勤の出勤数/残業h
@@ -322,7 +367,10 @@ function billingPeriod(year,month,closingDay){
   }
   const iso=d=>ymd(d.getFullYear(),d.getMonth()+1,d.getDate());
   const j=d=>`${d.getFullYear()}年${d.getMonth()+1}月${d.getDate()}日`;
-  return {start:iso(start),end:iso(end),label:`${j(start)}〜${j(end)}`,periodLabel:`${year}年${month}月分`};
+  // y/m も返す。請求番号を「請求タブでいま見ている月」ではなく
+  // 「実際に請求している期間」から採るため。
+  return {y:year,m:month,start:iso(start),end:iso(end),
+    label:`${j(start)}〜${j(end)}`,periodLabel:`${year}年${month}月分`};
 }
 function calcTax(sub,rate){return Math.floor(sub*(rate/100));}
 
@@ -1172,7 +1220,17 @@ function setAtt(date,field,value){
   // 日勤も夜勤も休なら車代も外す（出勤していない日に車代はつかない）。
   // 車代だけの日が必要なときは、車代の欄に直接入れれば残る。
   if((field==='attendance'||field==='nightAttendance')&&
-     (rec.attendance||0)===0&&(rec.nightAttendance||0)===0)rec.transportFee=0;
+     (rec.attendance||0)===0&&(rec.nightAttendance||0)===0){
+    rec.transportFee=0;
+    // 手入力の合計も一緒に消す。ここを消していなかったため、
+    // 「出勤1 → 合計を手入力 → やっぱり休み」の順で押すと
+    // 出勤していない日が手入力の額のまま請求されていた。
+    if(safeNum(rec.manualTotal,INPUT_MAX.manualTotal)>0){
+      rec.manualTotal=0;
+      manualExpanded.delete(xk(date));
+      toast('休みにしたので、手入力した合計も外しました');
+    }
+  }
   if(field==='manualTotal'&&v===0)manualExpanded.delete(xk(date));
   // どの欄を何度も打ち直しているかを見る（入れた数字そのものは記録しない）
   noteEdit(date,INPUT_LABEL[field]||field);
@@ -1327,6 +1385,10 @@ $('emp-save').addEventListener('click',()=>{
   const pay=payRaw===''?0:(parseInt(payRaw,10)||0);
   const npay=npayRaw===''?0:(parseInt(npayRaw,10)||0);
   if(pay>WAGE_MAX||npay>WAGE_MAX){toast(`⚠️ 支払単価は ${WAGE_MAX.toLocaleString('ja-JP')} 円までです`);return;}
+  // 桁の打ち間違いを止める。上限100万円だけでは 18,000 を 180,000 と打っても素通りだった
+  if(!wageLooksSane('日給',wage))return;
+  if(nwage>0&&!wageLooksSane('夜間単価',nwage))return;
+  if(pay>0&&!wageLooksSane('支払の日給',pay))return;
   if(editEmpId){
     const e=STATE.employees.find(x=>x.id===editEmpId);
     if(e){
@@ -1556,7 +1618,7 @@ function buildIssue(reports,period,batch){
   const tax=calcTax(subtotal,s.taxRate);
   return {
     id:uid(), issuedAt:new Date().toISOString(),
-    invoiceNo:invoiceNoOf(reports,batch,billY,billM),
+    invoiceNo:invoiceNoOf(reports,batch,period),
     issueDate:fmtDateJ(ymd(new Date().getFullYear(),new Date().getMonth()+1,new Date().getDate())),
     period:{start:period.start,end:period.end,label:period.label,periodLabel:period.periodLabel},
     clientName:s.client.companyName||'（請求先未設定）',
@@ -1680,16 +1742,31 @@ $('pv-print').addEventListener('click',()=>{
 
 /* A4 2ページ請求書HTML（ネイビー×白・帳票風）
    cssMode: 'print'(A4原寸) または 'screen'(画面幅フィット) */
-function invoiceNoOf(reports,batch,y,m){
-  return batch?`${y}-${pad2(m)}-ALL`
-    :`${y}-${pad2(m)}-${(reports[0].emp.id).replace(/[^0-9]/g,'').slice(0,3).padStart(3,'0')||'001'}`;
+/* 請求番号。以前は従業員IDから数字を3桁抜いていたため、
+   同じ月に2回発行すると同じ番号になり、従業員どうしでも衝突した。
+   その月の発行履歴を見て、次の連番を採る。 */
+function nextInvoiceSeq(y,m){
+  const pre=`${y}-${pad2(m)}-`;
+  let max=0;
+  (STATE.invoiceLog||[]).forEach(l=>{
+    const s=String((l&&l.invoiceNo)||'');
+    if(s.indexOf(pre)!==0)return;
+    const n=parseInt(s.slice(pre.length),10);
+    if(Number.isFinite(n)&&n>max)max=n;
+  });
+  return max+1;
+}
+function invoiceNoOf(reports,batch,period){
+  // 「請求タブでいま見ている月」ではなく、実際に請求している期間から採る
+  const y=(period&&period.y)||billY, m=(period&&period.m)||billM;
+  return `${y}-${pad2(m)}-${String(nextInvoiceSeq(y,m)).padStart(3,'0')}`;
 }
 /* opt で設定・請求番号・発行日を差し替えられる（発行履歴からの再表示に使う） */
 function buildInvoiceHTML(reports,period,batch,cssMode,opt){
   const s=(opt&&opt.settings)||STATE.settings;
   const css=(cssMode==='screen')?SCREEN_CSS:PRINT_CSS;
   const issueDate=(opt&&opt.issueDate)||fmtDateJ(ymd(new Date().getFullYear(),new Date().getMonth()+1,new Date().getDate()));
-  const invNo=(opt&&opt.invoiceNo)||invoiceNoOf(reports,batch,billY,billM);
+  const invNo=(opt&&opt.invoiceNo)||invoiceNoOf(reports,batch,period);
 
   let subtotal=0; reports.forEach(r=>subtotal+=r.rep.grandTotal);
   const tax=calcTax(subtotal,s.taxRate);
@@ -2533,18 +2610,47 @@ $('export-btn').addEventListener('click',()=>{
 });
 $('import-btn').addEventListener('click',()=>{
   const inp=document.createElement('input');inp.type='file';inp.accept='application/json,.json';
+  // 画面に付けずに click() すると、ブラウザによってはファイル選択が開かない。
+  // 見えない位置に置いてから開き、終わったら片付ける。
+  inp.style.cssText='position:fixed;left:-9999px;width:1px;height:1px;opacity:0;';
+  document.body.appendChild(inp);
+  const cleanup=()=>{try{inp.remove();}catch(e){}};
   inp.addEventListener('change',async()=>{
-    const f=inp.files&&inp.files[0];if(!f)return;
+    const f=inp.files&&inp.files[0];
+    if(!f){cleanup();return;}
     try{
       const o=JSON.parse(await f.text());
+      // 中身がバックアップの形をしているか確かめる。
+      // 以前は無関係なJSONでも「復元しました ✓」と出て、全データを置き換えていた。
+      if(!o||typeof o!=='object'||(!Array.isArray(o.employees)&&!Array.isArray(o.records))){
+        toast('⚠️ バックアップのファイルではないようです');return;
+      }
+      const now={e:STATE.employees.length,r:STATE.records.length,l:STATE.invoiceLog.length};
+      const next={e:Array.isArray(o.employees)?o.employees.length:now.e,
+                  r:Array.isArray(o.records)?o.records.length:now.r};
+      // 何がどう変わるかを見せてから決めさせる。以前は選んだ瞬間に全部入れ替わっていた
+      if(!confirm(
+        'バックアップから復元します。いまのデータは置き換わります。\n\n'+
+        `　従業員　${now.e}名 → ${next.e}名\n`+
+        `　勤怠　　${now.r}件 → ${next.r}件\n\n`+
+        '発行履歴は消さずに、両方を合わせます。\n\nよろしいですか？'))return;
       if(Array.isArray(o.employees))STATE.employees=o.employees;
       if(Array.isArray(o.records))STATE.records=o.records;
       if(o.settings)STATE.settings=mergeSettings(o.settings);
-      if(Array.isArray(o.invoiceLog))STATE.invoiceLog=o.invoiceLog;
+      // 発行履歴は追記のみの記録なので、置き換えずに併合する。
+      // 古いバックアップを戻したときに、発行済みの控えが巻き戻るのを防ぐ。
+      if(Array.isArray(o.invoiceLog)){
+        const seen=new Set(STATE.invoiceLog.map(l=>l&&l.id));
+        o.invoiceLog.forEach(l=>{if(l&&!seen.has(l.id)){STATE.invoiceLog.push(l);seen.add(l.id);}});
+        STATE.invoiceLog.sort((a,b)=>String(a.issuedAt||'')<String(b.issuedAt||'')?-1:1);
+      }
       STATE.ready=true;
-      await Promise.all([saveEmployees(),saveRecords(),saveSettings(),saveInvoiceLog(),saveReady()]);
+      const ok=await Promise.all([saveEmployees(),saveRecords(),saveSettings(),saveInvoiceLog(),saveReady()]);
+      // 保存できていないのに読み直すと、復元した内容ごと消えたように見える
+      if(ok.some(v=>v===false)){toast('⚠️ 復元を保存できませんでした');return;}
       toast('復元しました ✓');setTimeout(()=>location.reload(),700);
     }catch(e){toast('⚠️ ファイルを読めませんでした');}
+    finally{cleanup();}
   });
   inp.click();
 });

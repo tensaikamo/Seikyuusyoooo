@@ -442,6 +442,12 @@ textarea:focus{border-color:var(--navy-3);background:#fff;}
   font-size:.66rem;line-height:1.65;color:var(--sub);max-height:210px;overflow:auto;
   white-space:pre-wrap;word-break:break-all;margin-bottom:12px;
   font-family:ui-monospace,SFMono-Regular,Menlo,monospace;-webkit-overflow-scrolling:touch;}
+/* 保存できていない警告。トーストと違って自動で消さない */
+.save-alert{position:fixed;left:0;right:0;top:0;z-index:9999;display:none;
+  background:var(--danger);color:#fff;font-size:var(--fs-sm);font-weight:700;line-height:1.5;
+  padding:calc(env(safe-area-inset-top) + 10px) 16px 12px;
+  box-shadow:0 6px 20px rgba(0,0,0,.28);}
+.save-alert.show{display:block;}
 .rep-status{font-size:var(--fs-xs);color:var(--sub);margin-top:8px;line-height:1.5;min-height:1em;}
 .rep-status.ok{color:var(--navy-3);font-weight:700;}
 .rep-status.ng{color:var(--danger);font-weight:700;}
@@ -792,6 +798,8 @@ textarea:focus{border-color:var(--navy-3);background:#fff;}
   <div class="pv-scroll" id="pv-scroll"></div>
 </div>
 
+<!-- 保存できていないときに出したまま消さない警告。消えたデータに後で気づくのを防ぐ -->
+<div class="save-alert" id="save-alert" role="alert" aria-live="assertive"></div>
 <div class="toast" id="toast"></div>
 
 <script src="app.js"></script>
