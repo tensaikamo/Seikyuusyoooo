@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>日給管理・請求書</title>
-<meta name="description" content="日給制の勤怠管理と請求書発行。インボイス対応・A4 2ページPDF。">
+<meta name="description" content="日給制の勤怠管理と請求書発行。インボイス対応・A4印刷/PDF保存。">
 <link rel="manifest" href="manifest.json">
 <meta name="theme-color" content="#0f1b33">
 <meta name="apple-mobile-web-app-capable" content="yes">
@@ -626,7 +626,7 @@ textarea:focus{border-color:var(--navy-3);background:#fff;}
         </div>
       </div>
       <div id="sum-list"></div>
-      <button class="btn btn-amber" id="batch-pdf-btn" type="button" style="margin-top:4px;"><svg class="ic" viewBox="0 0 24 24"><path d="M6.5 2.8h7.2L18.5 7.6v12.1a1.5 1.5 0 0 1-1.5 1.5H6.5A1.5 1.5 0 0 1 5 19.7V4.3a1.5 1.5 0 0 1 1.5-1.5z"/><path d="M13.6 2.8v4.9h4.9"/><path d="M8.5 13h7M8.5 16.5h4.5"/></svg>まとめ請求書をPDFで作る</button>
+      <button class="btn btn-amber" id="batch-pdf-btn" type="button" style="margin-top:4px;"><svg class="ic" viewBox="0 0 24 24"><path d="M6.5 2.8h7.2L18.5 7.6v12.1a1.5 1.5 0 0 1-1.5 1.5H6.5A1.5 1.5 0 0 1 5 19.7V4.3a1.5 1.5 0 0 1 1.5-1.5z"/><path d="M13.6 2.8v4.9h4.9"/><path d="M8.5 13h7M8.5 16.5h4.5"/></svg>まとめ請求書を保存・印刷</button>
     </div>
   </section>
 
@@ -690,7 +690,7 @@ textarea:focus{border-color:var(--navy-3);background:#fff;}
       <!-- 発行履歴（電子帳簿保存法） -->
       <div class="card">
         <div class="card-t">請求書の発行履歴</div>
-        <div class="ebook-note">電子帳簿保存法に対応するため、発行した請求書は<b>発行時点の内容のまま</b>保存されます。記録は削除できず、取り消す場合は取消記録が追記されます。</div>
+        <div class="ebook-note">発行した請求書は<b>発行時点の内容のまま</b>再表示でき、取消時は元の記録を残して取消記録を追記します。法定保存を補助する機能なので、バックアップ保存を含む適切な運用が必要です。</div>
         <div id="log-list"></div>
         <button class="btn btn-ghost btn-sm" id="rule-btn" type="button" style="margin-top:10px;">事務処理規程をつくる</button>
       </div>
@@ -706,8 +706,8 @@ textarea:focus{border-color:var(--navy-3);background:#fff;}
       <!-- 開発者へのレポート -->
       <div class="card">
         <div class="card-t">開発者にようすを伝える</div>
-        <div class="ebook-note">アプリの使い方の記録は<b>この端末の中だけ</b>に保存されています。
-          勝手に送られることはありません。下のボタンを押したときだけ書き出されます。</div>
+        <div class="ebook-note">アプリの使い方の記録はこの端末に保存され、<b>初期設定では個人名や金額を含めない利用状況だけが自動送信</b>されます。
+          実データは、下のチェックを自分で有効にした場合だけ含まれます。</div>
         <label class="fl">困っていること・要望（任意）</label>
         <textarea id="rep-memo" rows="3" placeholder="例：夜勤の入力がしにくい／請求書に現場名を入れたい"></textarea>
         <label class="chk"><input type="checkbox" id="rep-include">
