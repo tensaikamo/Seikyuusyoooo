@@ -2728,6 +2728,17 @@ function dataIssues(){
     }
     if(!emp)cnt[nm+'|所属なし']=(cnt[nm+'|所属なし']||0)+1;
   });
+  // 発行済みの控えに同じ請求番号が複数あると、元請けの経理で取り違えが起きる。
+  // 別の端末で発行した控えを復元で併合すると起こりうる。
+  // 控えは消せない（電子帳簿保存法）ので、消さずに知らせる。
+  const noSeen=new Map();
+  (STATE.invoiceLog||[]).forEach(l=>{
+    if(!l||l.voidOf||!l.invoiceNo)return;
+    noSeen.set(l.invoiceNo,(noSeen.get(l.invoiceNo)||0)+1);
+  });
+  [...noSeen.entries()].filter(([,n])=>n>1).forEach(([no,n])=>{
+    out.push({who:no,what:'同じ請求番号',days:n,kind:'dupno'});
+  });
   Object.entries(cnt).forEach(([k,n])=>{
     const [who,what,kind]=k.split('|');out.push({who,what,days:n,kind:kind||'over'});
   });
@@ -2742,7 +2753,8 @@ function renderDataHealth(){
   // 「出勤が無いのに金額がついている」が上限を超えた、という意味の通らない文になっていた。
   const noAtt=iss.filter(i=>i.kind==='noatt');
   const overAtt=iss.filter(i=>i.kind==='overatt');
-  const other=iss.filter(i=>i.kind!=='noatt'&&i.kind!=='overatt');
+  const dupNo=iss.filter(i=>i.kind==='dupno');
+  const other=iss.filter(i=>['noatt','overatt','dupno'].indexOf(i.kind)<0);
   const parts=[];
   if(other.length)parts.push(`<div class="warn-card"><b>入力値に異常があります</b><br>
     ${other.map(i=>i.days
@@ -2759,6 +2771,11 @@ function renderDataHealth(){
     <br>1日は1人工までで、超えた分は残業時間で入れます。
     以前のアプリでは 1.5 や 2 を選べたため、その分に残業の割増がついていません。
     金額はそのままにしてあります。直す場合は勤怠タブで入れ直してください。</div>`);
+  if(dupNo.length)parts.push(`<div class="warn-card"><b>同じ請求番号の控えが複数あります</b><br>
+    ${dupNo.map(i=>`${esc(i.who)} が ${i.days} 件`).join('<br>')}
+    <br>別の端末で発行した控えを復元でまとめた可能性があります。
+    元請けに同じ番号の請求書が届いていないか確認してください。
+    控えは記録として残す必要があるため、消していません。</div>`);
   box.innerHTML=parts.join('');
 }
 
