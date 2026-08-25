@@ -3,7 +3,7 @@
    日給管理・請求書 — iPhone単一HTML版（依存ゼロ）
    ネイビー×白 / IndexedDB / A4印刷・PDF保存
    ============================================================= */
-const APP_VERSION='1.15.0';
+const APP_VERSION='1.16.0';
 
 /* ---------- レポートの既定の送信先 ----------
    ここに入れておくと、端末ごとに設定しなくても自動送信が働く。
@@ -40,6 +40,10 @@ const DEFAULT_SETTINGS={
   // 労基則19条は「日給÷1日の所定労働時間数」と定めており、8は定数ではない。
   // 7.5時間なのに8で割ると残業単価が低くなり、支払が法定を下回る。
   workHours:8,
+  // 労働時間の管理。既定は「定めが無い場合」の法どおり
+  breakMinutes:60,   // 所定に織り込まれている休憩
+  weekStartDow:0,    // 週の始まり。定めが無ければ日曜
+  legalRestDow:-1,   // 法定休日の曜日。-1 は決めていない
   issuer:{companyName:'',postalCode:'',address:'',phone:'',invoiceNumber:''},
   client:{companyName:'',postalCode:'',address:'',contactName:''},
   bank:{bankName:'',branchName:'',accountType:'普通',accountNumber:'',accountHolder:''}
@@ -649,8 +653,15 @@ function normalizeBackupSettings(raw,legacy=false){
   if(!legacy&&![0,8,10].includes(tax))backupFail('消費税率は 0・8・10% のいずれかにしてください');
   const closing=backupNum(s.closingDay??DEFAULT_SETTINGS.closingDay,'締め日',1,31);
   if(!Number.isInteger(closing)||(!legacy&&closing>28&&closing!==31))backupFail('締め日が不正です');
+  // workHours は検証の対象から漏れていて、復元すると所定労働時間が消えていた。
+  // 労働時間の管理の3つと合わせてここで拾う。古いバックアップには無いので既定に落とす。
+  const wh=backupNum(s.workHours??DEFAULT_SETTINGS.workHours,'所定労働時間',0.5,24);
+  const brk=backupNum(s.breakMinutes??DEFAULT_SETTINGS.breakMinutes,'休憩の既定',0,480);
+  const wsd=backupNum(s.weekStartDow??DEFAULT_SETTINGS.weekStartDow,'週の始まり',0,6);
+  const lrd=backupNum(s.legalRestDow??DEFAULT_SETTINGS.legalRestDow,'法定休日',-1,6);
+  if(!Number.isInteger(wsd)||!Number.isInteger(lrd))backupFail('曜日の指定が不正です');
   return {defaultTransportFee:backupNum(s.defaultTransportFee??DEFAULT_SETTINGS.defaultTransportFee,'車代の初期値',0,legacy?1000000000000:INPUT_MAX.transportFee),
-    taxRate:tax,closingDay:closing,monthlyGoal:backupNum(s.monthlyGoal??DEFAULT_SETTINGS.monthlyGoal,'月間目標',0,legacy?Number.MAX_SAFE_INTEGER:1000000000000),
+    taxRate:tax,closingDay:closing,workHours:wh,breakMinutes:brk,weekStartDow:wsd,legalRestDow:lrd,monthlyGoal:backupNum(s.monthlyGoal??DEFAULT_SETTINGS.monthlyGoal,'月間目標',0,legacy?Number.MAX_SAFE_INTEGER:1000000000000),
     issuer:{companyName:backupText(issuer.companyName,'自社名',200),postalCode:backupText(issuer.postalCode,'自社郵便番号',40),
       address:backupText(issuer.address,'自社住所',500),phone:backupText(issuer.phone,'電話番号',100),invoiceNumber:backupNoMarkup(issuer.invoiceNumber,'登録番号',100)},
     client:{companyName:backupText(client.companyName,'請求先名',200),postalCode:backupText(client.postalCode,'請求先郵便番号',40),
@@ -665,6 +676,8 @@ function normalizeBackupEmployee(raw,label,legacy=false){
   const out={id,name,dailyWage:backupNum(e.dailyWage,`${name}の日給`,legacy?0:1,wageMax),nightWage:backupNum(e.nightWage??0,`${name}の夜間単価`,0,wageMax),
     payWage:backupNum(e.payWage??0,`${name}の支払日給`,0,wageMax),payNightWage:backupNum(e.payNightWage??0,`${name}の支払夜間単価`,0,wageMax),
     createdAt:backupText(e.createdAt,`${name}の作成日時`,100)};
+  if(e.isOwner!=null&&typeof e.isOwner!=='boolean')backupFail(`${name}の事業主設定が不正です`);
+  if(e.isOwner===true)out.isOwner=true;
   if(e.wageHistory==null){out.wageHistory=null;return out;}
   if(!Array.isArray(e.wageHistory)||e.wageHistory.length>1000)backupFail(`${name}の単価履歴形式が不正です`);
   const dates=new Set();
@@ -686,6 +699,7 @@ function normalizeBackupRecord(raw,label,employeeIds,expectedEmployeeId,legacy=f
     nightOvertimeHours:backupNum(r.nightOvertimeHours??0,`${label}の夜間残業`,0,legacy?oldCountMax:INPUT_MAX.nightOvertimeHours),transportFee:backupNum(r.transportFee??0,`${label}の車代`,0,legacy?oldMoneyMax:INPUT_MAX.transportFee),
     transportToWorker:r.transportToWorker===true};
   if(r.transportToWorker!=null&&typeof r.transportToWorker!=='boolean')backupFail(`${label}の車代支払設定が不正です`);
+  if(r.breakMin!=null)rec.breakMin=backupNum(r.breakMin,`${label}の休憩時間`,0,480);
   if(r.manualTotal!=null)rec.manualTotal=backupNum(r.manualTotal,`${label}の手入力合計`,0,legacy?oldMoneyMax:INPUT_MAX.manualTotal);
   if(r.note!=null)rec.note=backupText(r.note,`${label}のメモ`,2000);
   return rec;
@@ -1530,9 +1544,55 @@ function renderAtt(){
     <div class="hero-body" style="display:flex;align-items:center;justify-content:space-between;width:100%;">
     <div><div class="rl">${viewY}年${viewM}月 合計（暦月 1日〜末日）</div><div class="rcheer">${cheer}</div>${note}</div>
     <span class="rv" id="run-v">${yenHTML(seed)}</span></div></div>`;
+  html+=otCardHTML(emp);
   body.innerHTML=html;
   animateYen($('run-v'),runTotal);
   lastRunTotal=runTotal;
+}
+
+/* 労働時間の集計カード。
+   入力した残業と法定時間外は意味が違うので、足さずに並べる。
+   前者は支払の根拠、後者は上限規制の対象。 */
+function otCardHTML(emp){
+  if(!emp)return '';
+  const bp=billingPeriod(viewY,viewM,STATE.settings.closingDay);
+  const r=overtimeBreakdown(emp.id,bp.start,bp.end);
+  if(!r.daily.length)return '';
+  const sum=(a,f)=>a.reduce((x,y)=>x+f(y),0);
+  const r1=n=>Math.round(n*10)/10;
+  const 実働=r1(sum(r.daily,d=>d.workedHours));
+  const 日超=r1(sum(r.daily,d=>d.dailyOver));
+  const 週超=r1(sum(r.daily,d=>d.weeklyOver));
+  const 休日=r1(sum(r.daily,d=>d.holidayHours));
+  const 時間外=r1(日超+週超);
+  const 出勤=r.daily.filter(d=>d.workedHours>0).length;
+  // 入力された残業h（支払の根拠になっている時間）
+  const recs=recordsInPeriod(emp.id,bp.start,bp.end);
+  const 入力残業=r1(recs.reduce((a,x)=>a+
+    ((safeNum(x.attendance,INPUT_MAX.attendance)>0?safeNum(x.overtimeHours,INPUT_MAX.overtimeHours):0)+
+     (safeNum(x.nightAttendance,INPUT_MAX.nightAttendance)>0?safeNum(x.nightOvertimeHours,INPUT_MAX.nightOvertimeHours):0)),0));
+  const owner=isOwner(emp);
+  const 残り=r1(OT_CAP.month-時間外);
+  const lv=owner?'':(時間外>OT_CAP.month?'ng':(時間外>=OT_CAP.month*0.8?'near':''));
+  // 最初の記録より前は数えられない。開始月は必ず過少に出る
+  const first=recs.length?recs[0].date:null;
+  const 部分的=first&&first>bp.start;
+  const 差=r1(時間外-入力残業);
+  return `<div class="ot-card${lv?' '+lv:''}">
+    <div class="ot-h">労働時間　<span>${fmtDateJ(bp.start).replace(/^\d+年/,'')}〜${fmtDateJ(bp.end).replace(/^\d+年/,'')}</span></div>
+    <div class="ot-top">実働 <b>${実働}</b>h　／　出勤 <b>${出勤}</b>日${休日>0?`　／　休日労働 <b>${休日}</b>h`:''}</div>
+    <div class="ot-rows">
+      <div><span>入力した残業</span><b>${入力残業}h</b><i>支払はこの時間で計算しています</i></div>
+      <div class="ot-legal"><span>法定時間外</span><b>${時間外}h</b><i>上限規制はこちらで数えます</i></div>
+      <div class="ot-sub"><span>1日8時間を超えた分</span><b>${日超}h</b></div>
+      <div class="ot-sub"><span>週40時間を超えた分</span><b>${週超}h</b></div>
+    </div>
+    ${owner?'<div class="ot-note">事業主本人のため、上限規制の対象外です。</div>'
+      :`<div class="ot-cap">月45時間まで あと <b>${残り>0?残り:0}</b>h${時間外>OT_CAP.month?'（超過しています）':''}</div>`}
+    ${(週超>0&&入力残業===0)?`<div class="ot-note">残業を入れていなくても、週6日×${workHours()}時間なら週40時間を超えます。入力の間違いではありません。</div>`:''}
+    ${(差>0&&!owner)?`<div class="ot-note warn">この差 ${差}h 分の割増賃金は、請求にも支払にも入っていません。</div>`:''}
+    ${部分的?`<div class="ot-note">${fmtDateJ(first).replace(/^\d+年/,'')}より前の記録がないため、実際より少なく出ています。</div>`:''}
+  </div>`;
 }
 
 /* ---------- 日別シート（カレンダーのセルタップ） ---------- */
@@ -1626,6 +1686,18 @@ function refreshDay(ds,field){
   const ok=light?(updateDayTotalOnly(ds,emp)||updateDayRow(ds,emp)):updateDayRow(ds,emp);
   if(!ok){renderAtt();return;}                // 行が見つからない等は従来どおり全体描画
   updateRunTotal(emp);
+  updateOtCard(emp);
+}
+/* 集計カードは1行だけ差し替えても直らない。
+   月曜の入力が金曜の「週40時間を超えた分」の配賦を動かすため、毎回作り直す。 */
+function updateOtCard(emp){
+  const body=$('att-body');if(!body)return;
+  const old=body.querySelector('.ot-card');
+  const html=otCardHTML(emp);
+  if(!html){if(old)old.remove();return;}
+  const box=document.createElement('div');box.innerHTML=html;
+  const fresh=box.firstElementChild;
+  if(old)old.replaceWith(fresh);else body.appendChild(fresh);
 }
 function toggleNight(ds){
   const k=xk(ds);
@@ -1718,6 +1790,7 @@ function openEmpModal(id){
   $('emp-npay').value=(emp&&emp.payNightWage)?emp.payNightWage:'';
   $('emp-wage').value=emp?emp.dailyWage:'';
   $('emp-nwage').value=(emp&&emp.nightWage)?emp.nightWage:'';
+  $('emp-owner').checked=!!(emp&&emp.isOwner);
   $('emp-delete').style.display=emp?'flex':'none';
   updateEmpHint();
   noteOpen(id?'従業員の編集':'従業員の追加');
@@ -1797,9 +1870,11 @@ $('emp-save').addEventListener('click',()=>{
         }
       }
       e.name=name;e.dailyWage=wage;e.nightWage=nwage;e.payWage=pay;e.payNightWage=npay;
+      if($('emp-owner').checked)e.isOwner=true;else delete e.isOwner;
     }
   }else{
     const e={id:uid(),name,dailyWage:wage,nightWage:nwage,payWage:pay,payNightWage:npay,createdAt:new Date().toISOString()};
+    if($('emp-owner').checked)e.isOwner=true;
     STATE.employees.push(e);selEmp=e.id;
   }
   saveEmployees();closeEmpModal();renderEmpRow();renderAtt();
@@ -2459,7 +2534,11 @@ function loadSettingsForm(){
   $('set-closing').value=[...$('set-closing').options].some(o=>o.value===cd)?cd:'31';
   $('set-transport').value=s.defaultTransportFee;$('set-goal').value=s.monthlyGoal||'';
   $('set-workh').value=s.workHours||8;
-  updateClosingHint();updateWorkhHint();
+  $('set-break').value=(s.breakMinutes==null?60:s.breakMinutes);
+  buildDowOptions();
+  $('set-weekstart').value=String(s.weekStartDow==null?0:s.weekStartDow);
+  $('set-restdow').value=String(s.legalRestDow==null?-1:s.legalRestDow);
+  updateClosingHint();updateWorkhHint();updateRestDowHint();
 }
 /* 所定労働時間を変えると残業単価が変わる。何がどう変わるかを画面に出しておく */
 function updateWorkhHint(){
@@ -2469,6 +2548,22 @@ function updateWorkhHint(){
   el.innerHTML=`残業単価 = 日給 ÷ ${H} × 1.25`+
     `（日給 ${yen(w)} なら ${yen(Math.round(overtimeRate(w)))}/h）`+
     (H===8?'':'<br>※ 発行済みの請求書は変わりませんが、まだ発行していない月の残業代は変わります');
+}
+function buildDowOptions(){
+  const ws=$('set-weekstart'),rd=$('set-restdow');
+  if(ws&&!ws.options.length)
+    WEEK.forEach((n,i)=>{const o=document.createElement('option');o.value=String(i);o.textContent=n+'曜日';ws.appendChild(o);});
+  if(rd&&!rd.options.length){
+    const none=document.createElement('option');none.value='-1';none.textContent='決めていない';rd.appendChild(none);
+    WEEK.forEach((n,i)=>{const o=document.createElement('option');o.value=String(i);o.textContent=n+'曜日';rd.appendChild(o);});
+  }
+}
+function updateRestDowHint(){
+  const el=$('restdow-hint');if(!el)return;
+  const v=Number(STATE.settings.legalRestDow);
+  el.textContent=(v>=0)
+    ? `${WEEK[v]}曜日に働いた分は「休日労働」として数えます。`
+    : '決めていない場合、7日とも働いた週だけ1日を休日労働として数えます。単月100時間・平均80時間の判定はやや甘く出ます。';
 }
 function bindSettings(){
   const m=[
@@ -2482,6 +2577,13 @@ function bindSettings(){
     ['bk-holder',v=>STATE.settings.bank.accountHolder=v],
     ['set-tax',v=>STATE.settings.taxRate=parseInt(v,10)||0],
     ['set-closing',v=>{STATE.settings.closingDay=parseInt(v,10)||31;updateClosingHint();}],
+    ['set-break',v=>{
+      const n=parseInt(v,10);
+      STATE.settings.breakMinutes=(Number.isFinite(n)&&n>=0&&n<=480)?n:60;
+      attDirty=true;
+    }],
+    ['set-weekstart',v=>{STATE.settings.weekStartDow=parseInt(v,10)||0;attDirty=true;}],
+    ['set-restdow',v=>{STATE.settings.legalRestDow=parseInt(v,10);updateRestDowHint();attDirty=true;}],
     ['set-workh',v=>{
       const h=parseFloat(v);
       STATE.settings.workHours=(Number.isFinite(h)&&h>0&&h<=24)?h:8;

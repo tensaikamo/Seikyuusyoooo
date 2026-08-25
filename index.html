@@ -448,6 +448,30 @@ textarea:focus{border-color:var(--navy-3);background:#fff;}
   padding:calc(env(safe-area-inset-top) + 10px) 16px 12px;
   box-shadow:0 6px 20px rgba(0,0,0,.28);}
 .save-alert.show{display:block;}
+/* 労働時間の集計カード。入力した残業と法定時間外を並べて見せる */
+.ot-card{background:#fff;border:1px solid var(--line);border-radius:var(--r-md);
+  padding:14px 15px;margin-top:14px;box-shadow:var(--sh-1);}
+.ot-card.near{border-color:#e8a33d;background:#fffdf6;}
+.ot-card.ng{border-color:var(--danger);background:#fff7f7;}
+.ot-h{font-size:var(--fs-xs);font-weight:800;color:var(--mut);letter-spacing:.06em;margin-bottom:8px;}
+.ot-h span{font-weight:400;letter-spacing:0;}
+.ot-top{font-size:var(--fs-sm);color:var(--sub);margin-bottom:10px;}
+.ot-top b{color:var(--ink);font-variant-numeric:tabular-nums;}
+.ot-rows>div{display:flex;align-items:baseline;gap:8px;padding:5px 0;
+  border-top:1px solid var(--line);font-size:var(--fs-sm);}
+.ot-rows>div:first-child{border-top:none;}
+.ot-rows span{color:var(--sub);min-width:9.5em;}
+.ot-rows b{font-variant-numeric:tabular-nums;font-weight:800;margin-left:auto;}
+.ot-rows i{font-style:normal;font-size:var(--fs-xs);color:var(--mut);
+  flex-basis:100%;margin-left:0;order:9;}
+.ot-legal b{color:var(--navy);font-size:1.05rem;}
+.ot-sub{padding-left:12px;}
+.ot-sub span,.ot-sub b{font-size:var(--fs-xs);color:var(--mut);font-weight:600;}
+.ot-cap{margin-top:9px;font-size:var(--fs-sm);color:var(--sub);}
+.ot-cap b{color:var(--ink);font-variant-numeric:tabular-nums;}
+.ot-card.ng .ot-cap{color:var(--danger);font-weight:700;}
+.ot-note{margin-top:8px;font-size:var(--fs-xs);color:var(--sub);line-height:1.6;}
+.ot-note.warn{color:var(--danger);font-weight:700;}
 .rep-status{font-size:var(--fs-xs);color:var(--sub);margin-top:8px;line-height:1.5;min-height:1em;}
 .rep-status.ok{color:var(--navy-3);font-weight:700;}
 .rep-status.ng{color:var(--danger);font-weight:700;}
@@ -686,6 +710,20 @@ textarea:focus{border-color:var(--navy-3);background:#fff;}
         <div class="field"><label class="fl">車代の初期値（円）</label><input type="number" id="set-transport" inputmode="numeric" min="0" max="100000" step="1" placeholder="1000"></div>
         <div class="field"><label class="fl">月間の売上目標（円）<span style="color:var(--mut);font-weight:400;">／空欄なら直近3ヶ月の平均</span></label><input type="number" id="set-goal" inputmode="numeric" placeholder="例：500000"></div>
       </div>
+      <!-- 労働時間の管理（労基法の上限規制） -->
+      <div class="card">
+        <div class="card-t">労働時間の管理</div>
+        <div class="ebook-note">残業時間を入れていなくても、週6日×8時間なら週40時間を超えます。
+          超えた分は法定の時間外労働です。ここの設定で数え方が決まります。</div>
+        <div class="grid2 field">
+          <div><label class="fl">休憩の既定（分）</label>
+            <input type="number" id="set-break" inputmode="numeric" min="0" max="480" step="5" placeholder="60"></div>
+          <div><label class="fl">週の始まり</label><select id="set-weekstart"></select></div>
+        </div>
+        <div class="field"><label class="fl">法定休日（週1日）</label><select id="set-restdow"></select>
+          <div class="closing-hint" id="restdow-hint"></div></div>
+      </div>
+      <div id="labor-health" style="display:none;"></div>
       <div id="data-health" style="display:none;"></div>
       <!-- 発行履歴（電子帳簿保存法） -->
       <div class="card">
@@ -770,6 +808,9 @@ textarea:focus{border-color:var(--navy-3);background:#fff;}
     <div class="field"><label class="fl">支払日給（円）</label><input type="number" id="emp-pay" inputmode="numeric" min="0" max="1000000" step="1" placeholder="例：18000"></div>
     <div class="field"><label class="fl">夜間の支払単価（円）</label><input type="number" id="emp-npay" inputmode="numeric" min="0" max="1000000" step="1" placeholder="例：22500"></div>
     <div id="emp-ot-hint" style="font-size:.74rem;color:var(--sub);margin-bottom:14px;"></div>
+    <label class="chk" style="margin-bottom:14px;"><input type="checkbox" id="emp-owner">
+      <span>この人は事業主本人<b>労働時間の上限規制は事業主本人には適用されません。
+        出面と支払の記録は今までどおり残ります</b></span></label>
     <button class="btn btn-navy" id="emp-save" type="button">保存</button>
     <button class="btn btn-danger btn-sm" id="emp-delete" type="button" style="margin-top:9px;display:none;">この従業員を削除</button>
   </div>
