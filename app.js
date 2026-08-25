@@ -3,7 +3,7 @@
    日給管理・請求書 — iPhone単一HTML版（依存ゼロ）
    ネイビー×白 / IndexedDB / A4印刷・PDF保存
    ============================================================= */
-const APP_VERSION='1.13.0';
+const APP_VERSION='1.14.0';
 
 /* ---------- レポートの既定の送信先 ----------
    ここに入れておくと、端末ごとに設定しなくても自動送信が働く。
@@ -455,6 +455,137 @@ function payReport(emp,start,end){
   return {employeeId:emp.id,totalAttendance:att,totalNightAttendance:natt,
     totalDailyWage:wage,totalOvertimePay:ot,totalNightWage:nwage,totalNightOvertimePay:not,
     totalTransportFee:tr,grandTotal:wage+ot+nwage+not+tr,records:recs};
+}
+
+/* ---------- 労働時間の集計（法定時間外・上限規制） ----------
+   金額の計算とは完全に分ける。ここから dailyTotal などは一切呼ばない。
+   理由：所定労働時間（設定値）と法定労働時間（8時間・40時間）は別物で、
+   混ぜると所定7.5時間の職場で法定時間外を過大に数えてしまう。
+
+   数え方の順序（これを外すと二重計上になる）
+     ① まず 1日8時間を超えた分を時間外にする
+     ② 次に 週40時間を超えた分を時間外にする。
+        ただし①で時間外にした分は40時間の母数に入れない
+   月〜金を毎日9時間なら、①で5時間、②は0。合計10時間にはならない。 */
+const LEGAL_DAY_HOURS=8;    // 法定。設定では変えられない
+const LEGAL_WEEK_HOURS=40;  // 同上
+const NO_BREAK_ADD_HOURS=1; // 休憩を取れなかった日に足す時間
+const OT_CAP={month:45,year:360,yearSpecial:720,single:100,avg:80,over45Times:6};
+
+/* 1日の実労働時間。人工を時間に直し、残業を足す。単価も金額も見ない。 */
+function workedHours(rec){
+  if(!rec)return 0;
+  const H=workHours();
+  const att=safeNum(rec.attendance,INPUT_MAX.attendance);
+  const natt=safeNum(rec.nightAttendance,INPUT_MAX.nightAttendance);
+  // 休みの日に残っている残業hは労働時間としても数えない（dailyTotal と同じ考え方）
+  const day=att>0?att*H+safeNum(rec.overtimeHours,INPUT_MAX.overtimeHours)
+    +(rec.noBreak?NO_BREAK_ADD_HOURS:0):0;
+  const night=natt>0?natt*H+safeNum(rec.nightOvertimeHours,INPUT_MAX.nightOvertimeHours):0;
+  return Math.min(day+night,24);   // 同じ日に全部入ると24時間を超えうる
+}
+function otSettings(){
+  const s=(STATE&&STATE.settings)||{};
+  const w=Number(s.weekStartDow);
+  const r=Number(s.legalRestDow);
+  return {weekStartDow:(Number.isFinite(w)&&w>=0&&w<=6)?w:0,
+          legalRestDow:(Number.isFinite(r)&&r>=0&&r<=6)?r:-1,
+          closingDay:Number(s.closingDay)||31};
+}
+function addDaysIso(ds,n){const d=new Date(ds+'T00:00:00');d.setDate(d.getDate()+n);
+  return ymd(d.getFullYear(),d.getMonth()+1,d.getDate());}
+function dowOf(ds){return new Date(ds+'T00:00:00').getDay();}
+/* その日が属する週の初日 */
+function weekStartOf(ds,startDow){
+  const back=(dowOf(ds)-startDow+7)%7;
+  return addDaysIso(ds,-back);
+}
+/* 週1本を計算して、法定時間外を「発生した日」に配賦する。純関数。 */
+function buildWeekLedger(weekStart,hoursOf,cfg){
+  const days=[];
+  for(let i=0;i<7;i++)days.push(addDaysIso(weekStart,i));
+  const h=days.map(hoursOf);
+  // 法定休日をどの日にするか。
+  // 曜日が決まっていればその日。決まっていなければ、7日とも働いた週だけ
+  // 最終日を休日労働として扱う（週1日の休みが無い週＝労基法35条に触れる）
+  let restIdx=-1;
+  if(cfg.legalRestDow>=0)restIdx=(cfg.legalRestDow-cfg.weekStartDow+7)%7;
+  else if(h.every(x=>x>0))restIdx=6;
+  const rows={};let cum=0;
+  days.forEach((ds,i)=>{
+    const hh=h[i];
+    if(i===restIdx&&hh>0){
+      // 休日労働は時間外に数えず、40時間の母数にも入れない
+      rows[ds]={workedHours:hh,dailyOver:0,weeklyOver:0,holidayHours:hh};
+      return;
+    }
+    const dailyOver=Math.max(0,hh-LEGAL_DAY_HOURS);
+    const base=Math.min(hh,LEGAL_DAY_HOURS);        // ①で時間外にした分は母数に入れない
+    const before=cum;cum+=base;
+    const weeklyOver=cum>LEGAL_WEEK_HOURS
+      ?cum-Math.max(LEGAL_WEEK_HOURS,before):0;
+    rows[ds]={workedHours:hh,dailyOver,weeklyOver,holidayHours:0};
+  });
+  return rows;
+}
+const round1=n=>Math.round(n*10)/10;
+/* 期間の法定時間外を、日・週・月に分けて返す。
+   週は必ず完全な7日で計算してから期間で切る。
+   期間の中の日だけで週を組むと、月初と月末の週が切れて数え落とす。 */
+function overtimeBreakdown(employeeId,startDate,endDate){
+  const empty={daily:[],weekly:[],months:[],
+    totals:{overtime:0,withHoliday:0,months45Count:0}};
+  if(!employeeId||!startDate||!endDate||startDate>endDate)return empty;
+  const cfg=otSettings();
+  const recs=(idx().byEmp.get(employeeId)||[]);
+  if(!recs.length)return empty;
+  const hours={};
+  recs.forEach(r=>{if(r&&r.date)hours[r.date]=workedHours(r);});
+  const hoursOf=ds=>hours[ds]||0;
+  // 期間の両端を週境界まで広げる
+  let cur=weekStartOf(startDate,cfg.weekStartDow);
+  const lastWeek=weekStartOf(endDate,cfg.weekStartDow);
+  const daily=[],weekly=[];
+  while(cur<=lastWeek){
+    const rows=buildWeekLedger(cur,hoursOf,cfg);
+    let wh=0,wo=0;
+    for(let i=0;i<7;i++){
+      const ds=addDaysIso(cur,i);
+      if(ds<startDate||ds>endDate)continue;   // 集計は期間内の日だけ
+      const r=rows[ds];
+      daily.push({date:ds,workedHours:round1(r.workedHours),
+        dailyOver:round1(r.dailyOver),weeklyOver:round1(r.weeklyOver),
+        holidayHours:round1(r.holidayHours)});
+      wh+=r.workedHours;wo+=r.dailyOver+r.weeklyOver;
+    }
+    weekly.push({weekStart:cur,weekEnd:addDaysIso(cur,6),
+      workedHours:round1(wh),legalOver:round1(wo)});
+    cur=addDaysIso(cur,7);
+  }
+  // 月は締め日で区切る。closingDay が月末なら暦月と一致する
+  const byMonth=new Map();
+  daily.forEach(d=>{
+    const dt=new Date(d.date+'T00:00:00');
+    let y=dt.getFullYear(),m=dt.getMonth()+1;
+    let p=billingPeriod(y,m,cfg.closingDay);
+    if(d.date>p.end){const n=m===12?{y:y+1,m:1}:{y,m:m+1};y=n.y;m=n.m;p=billingPeriod(y,m,cfg.closingDay);}
+    else if(d.date<p.start){const n=m===1?{y:y-1,m:12}:{y,m:m-1};y=n.y;m=n.m;p=billingPeriod(y,m,cfg.closingDay);}
+    const key=y+'-'+pad2(m);
+    if(!byMonth.has(key))byMonth.set(key,{label:p.periodLabel,start:p.start,end:p.end,
+      overtime:0,holiday:0});
+    const b=byMonth.get(key);
+    b.overtime+=d.dailyOver+d.weeklyOver;b.holiday+=d.holidayHours;
+  });
+  const months=[...byMonth.entries()].sort((a,b)=>a[0]<b[0]?-1:1).map(([,b])=>{
+    const overtime=round1(b.overtime), withHoliday=round1(b.overtime+b.holiday);
+    return {label:b.label,start:b.start,end:b.end,overtime,withHoliday,
+      exceeds45:overtime>OT_CAP.month,
+      exceeds100:withHoliday>=OT_CAP.single};   // 法は「100時間未満」。100ちょうどで違反
+  });
+  return {daily,weekly,months,totals:{
+    overtime:round1(months.reduce((a,x)=>a+x.overtime,0)),
+    withHoliday:round1(months.reduce((a,x)=>a+x.withHoliday,0)),
+    months45Count:months.filter(x=>x.exceeds45).length}};
 }
 
 /* ---------- 請求番号 ---------- */
