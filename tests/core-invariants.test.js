@@ -552,12 +552,12 @@ test('リリース表記は実際の印刷/PDF保存方式と一致する', () =
   const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
   const manifest = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'manifest.json'), 'utf8'));
   const sw = fs.readFileSync(path.join(__dirname, '..', 'sw.js'), 'utf8');
-  assert.match(app, /const APP_VERSION='1\.14\.0';/);
+  assert.match(app, /const APP_VERSION='1\.15\.0';/);
   assert.doesNotMatch(app, /A4 2ページPDF/);
   assert.doesNotMatch(html, /A4 2ページPDF/);
   assert.equal(manifest.description.includes('A4 2ページPDF'), false);
   assert.match(html, /まとめ請求書を保存・印刷/);
-  assert.match(sw, /const CACHE='invoice-v27';/);
+  assert.match(sw, /const CACHE='invoice-v28';/);
 });
 
 

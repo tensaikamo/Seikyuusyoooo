@@ -360,8 +360,8 @@ test('restore is atomic and app-owned caches are scoped', () => {
 });
 
 test('version, cache and automatic-report disclosure are updated together', () => {
-  assert.match(source, /const APP_VERSION='1\.14\.0'/);
-  assert.match(swSource, /const CACHE='invoice-v27'/);
+  assert.match(source, /const APP_VERSION='1\.15\.0'/);
+  assert.match(swSource, /const CACHE='invoice-v28'/);
   assert.match(htmlSource, /利用状況だけが自動送信/);
   assert.doesNotMatch(htmlSource, /勝手に送られることはありません/);
   assert.match(source, /const printSeal=.*cssMode==='print'/);

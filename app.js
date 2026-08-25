@@ -3,7 +3,7 @@
    日給管理・請求書 — iPhone単一HTML版（依存ゼロ）
    ネイビー×白 / IndexedDB / A4印刷・PDF保存
    ============================================================= */
-const APP_VERSION='1.14.0';
+const APP_VERSION='1.15.0';
 
 /* ---------- レポートの既定の送信先 ----------
    ここに入れておくと、端末ごとに設定しなくても自動送信が働く。
@@ -291,7 +291,10 @@ function dailyTotal(rec,emp){
   // （「休」にしても残業hが残っていると課金されていた不具合の対策）
   const att=safeNum(rec.attendance,INPUT_MAX.attendance), natt=safeNum(rec.nightAttendance,INPUT_MAX.nightAttendance);
   const wage=Math.round(dayWage*att);
-  const ot=att>0?Math.round(overtimeRate(dayWage)*safeNum(rec.overtimeHours,INPUT_MAX.overtimeHours)):0;
+  // 休憩を取れなかった分も働いた時間なので残業代に入れる。
+  // breakMin が入っている日だけ効くので、既存の記録の金額は変わらない。
+  const otH=safeNum(rec.overtimeHours,INPUT_MAX.overtimeHours)+breakShortfallHours(rec);
+  const ot=att>0?Math.round(overtimeRate(dayWage)*otH):0;
   // 夜勤
   const nwage=Math.round(nightWage*natt);
   const not=natt>0?Math.round(overtimeRate(nightWage)*safeNum(rec.nightOvertimeHours,INPUT_MAX.nightOvertimeHours)):0;
@@ -467,9 +470,28 @@ function payReport(emp,start,end){
      ② 次に 週40時間を超えた分を時間外にする。
         ただし①で時間外にした分は40時間の母数に入れない
    月〜金を毎日9時間なら、①で5時間、②は0。合計10時間にはならない。 */
-const LEGAL_DAY_HOURS=8;    // 法定。設定では変えられない
-const LEGAL_WEEK_HOURS=40;  // 同上
-const NO_BREAK_ADD_HOURS=1; // 休憩を取れなかった日に足す時間
+/* 法定の上限。建設業は週44時間の特例（商業・映画演劇・保健衛生・接客娯楽で
+   常時10人未満）の対象外なので、40時間で固定。
+   設定で緩められるようにはしない。緩めると違法な状態を「適法」と表示してしまう。
+   変形労働時間制など、将来ほかの枠で数える必要が出たときのために
+   関数側は引数で受け取れる形にしてある。 */
+const LEGAL_DAY_HOURS=8;
+const LEGAL_WEEK_HOURS=40;
+/* 休憩。所定8時間には1時間の休憩が織り込まれている前提。
+   休憩を取れなかった／短かった日は、その分だけ実労働が延びる。
+   rec.breakMin（分）が入っている日だけ、既定との差を足す。
+   既存の記録には無いフィールドなので、過去の金額は1円も動かない。 */
+function defaultBreakMin(){
+  const v=Number(STATE&&STATE.settings&&STATE.settings.breakMinutes);
+  return (Number.isFinite(v)&&v>=0&&v<=480)?v:60;
+}
+function breakShortfallHours(rec){
+  if(!rec||rec.breakMin==null)return 0;
+  const actual=Number(rec.breakMin);
+  if(!Number.isFinite(actual)||actual<0)return 0;
+  const diff=defaultBreakMin()-Math.min(actual,480);
+  return diff>0?diff/60:0;   // 既定より長く休んだ日は減らさない（所定は所定）
+}
 const OT_CAP={month:45,year:360,yearSpecial:720,single:100,avg:80,over45Times:6};
 
 /* 1日の実労働時間。人工を時間に直し、残業を足す。単価も金額も見ない。 */
@@ -480,7 +502,7 @@ function workedHours(rec){
   const natt=safeNum(rec.nightAttendance,INPUT_MAX.nightAttendance);
   // 休みの日に残っている残業hは労働時間としても数えない（dailyTotal と同じ考え方）
   const day=att>0?att*H+safeNum(rec.overtimeHours,INPUT_MAX.overtimeHours)
-    +(rec.noBreak?NO_BREAK_ADD_HOURS:0):0;
+    +breakShortfallHours(rec):0;
   const night=natt>0?natt*H+safeNum(rec.nightOvertimeHours,INPUT_MAX.nightOvertimeHours):0;
   return Math.min(day+night,24);   // 同じ日に全部入ると24時間を超えうる
 }
@@ -501,7 +523,9 @@ function weekStartOf(ds,startDow){
   return addDaysIso(ds,-back);
 }
 /* 週1本を計算して、法定時間外を「発生した日」に配賦する。純関数。 */
-function buildWeekLedger(weekStart,hoursOf,cfg){
+function buildWeekLedger(weekStart,hoursOf,cfg,limits){
+  const DAY=(limits&&limits.day)||LEGAL_DAY_HOURS;
+  const WEEK=(limits&&limits.week)||LEGAL_WEEK_HOURS;
   const days=[];
   for(let i=0;i<7;i++)days.push(addDaysIso(weekStart,i));
   const h=days.map(hoursOf);
@@ -519,11 +543,10 @@ function buildWeekLedger(weekStart,hoursOf,cfg){
       rows[ds]={workedHours:hh,dailyOver:0,weeklyOver:0,holidayHours:hh};
       return;
     }
-    const dailyOver=Math.max(0,hh-LEGAL_DAY_HOURS);
-    const base=Math.min(hh,LEGAL_DAY_HOURS);        // ①で時間外にした分は母数に入れない
+    const dailyOver=Math.max(0,hh-DAY);
+    const base=Math.min(hh,DAY);                    // ①で時間外にした分は母数に入れない
     const before=cum;cum+=base;
-    const weeklyOver=cum>LEGAL_WEEK_HOURS
-      ?cum-Math.max(LEGAL_WEEK_HOURS,before):0;
+    const weeklyOver=cum>WEEK?cum-Math.max(WEEK,before):0;
     rows[ds]={workedHours:hh,dailyOver,weeklyOver,holidayHours:0};
   });
   return rows;
@@ -532,7 +555,10 @@ const round1=n=>Math.round(n*10)/10;
 /* 期間の法定時間外を、日・週・月に分けて返す。
    週は必ず完全な7日で計算してから期間で切る。
    期間の中の日だけで週を組むと、月初と月末の週が切れて数え落とす。 */
-function overtimeBreakdown(employeeId,startDate,endDate){
+/* 事業主本人は労働基準法上の労働者ではないので、上限規制の対象外。
+   一緒に現場に出ていて従業員リストに入っていても、本人に違反警告は出さない。 */
+function isOwner(emp){return !!(emp&&emp.isOwner);}
+function overtimeBreakdown(employeeId,startDate,endDate,limits){
   const empty={daily:[],weekly:[],months:[],
     totals:{overtime:0,withHoliday:0,months45Count:0}};
   if(!employeeId||!startDate||!endDate||startDate>endDate)return empty;
@@ -547,7 +573,7 @@ function overtimeBreakdown(employeeId,startDate,endDate){
   const lastWeek=weekStartOf(endDate,cfg.weekStartDow);
   const daily=[],weekly=[];
   while(cur<=lastWeek){
-    const rows=buildWeekLedger(cur,hoursOf,cfg);
+    const rows=buildWeekLedger(cur,hoursOf,cfg,limits);
     let wh=0,wo=0;
     for(let i=0;i<7;i++){
       const ds=addDaysIso(cur,i);
