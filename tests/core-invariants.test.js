@@ -558,12 +558,12 @@ test('リリース表記は実際の印刷/PDF保存方式と一致する', () =
   const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
   const manifest = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'manifest.json'), 'utf8'));
   const sw = fs.readFileSync(path.join(__dirname, '..', 'sw.js'), 'utf8');
-  assert.match(app, /const APP_VERSION='1\.17\.0';/);
+  assert.match(app, /const APP_VERSION='1\.18\.0';/);
   assert.doesNotMatch(app, /A4 2ページPDF/);
   assert.doesNotMatch(html, /A4 2ページPDF/);
   assert.equal(manifest.description.includes('A4 2ページPDF'), false);
   assert.match(html, /まとめ請求書を保存・印刷/);
-  assert.match(sw, /const CACHE='invoice-v30';/);
+  assert.match(sw, /const CACHE='invoice-v31';/);
 });
 
 
@@ -571,4 +571,50 @@ test('Service Workerのactivateは当アプリの旧cacheだけを削除する',
   const sw = fs.readFileSync(path.join(__dirname, '..', 'sw.js'), 'utf8');
   assert.match(sw, /filter\(k=>k\.startsWith\('invoice-'\)&&k!==CACHE\)/);
   assert.doesNotMatch(sw, /filter\(k=>k!==CACHE\)/);
+});
+
+/* ---- 発行時点の設定で計算する（v1.18.0）----
+   workHours/defaultBreakMin が実行時の STATE.settings を直接読んでいたため、
+   ・発行済み請求書を再印刷すると表紙と明細が食い違う
+   ・所定労働時間を変えたあと自分のバックアップが全件拒否される
+   という2つが起きていた。どちらも同じ原因なので、設定を渡せることを固定する。 */
+test('dailyTotal: 渡した設定で計算し、今の設定に引きずられない', () => {
+  const emp = { dailyWage: 18000, nightWage: 0 };
+  const rec = { attendance: 1, overtimeHours: 1, nightAttendance: 0, nightOvertimeHours: 0, transportFee: 0 };
+  core.STATE.settings.workHours = 7.5;                     // 今の端末の設定
+  assert.equal(core.dailyTotal(rec, emp).ot, 3000);        // 18000/7.5*1.25
+  assert.equal(core.dailyTotal(rec, emp, { workHours: 8 }).ot, 2813);   // 発行時は所定8時間
+  core.STATE.settings.workHours = 8;
+  assert.equal(core.dailyTotal(rec, emp, { workHours: 7.5 }).ot, 3000);
+});
+
+test('dailyTotal: 休憩の既定も渡した設定で見る', () => {
+  const emp = { dailyWage: 16000, nightWage: 0 };
+  const rec = { attendance: 1, overtimeHours: 0, nightAttendance: 0, nightOvertimeHours: 0, transportFee: 0, breakMin: 0 };
+  core.STATE.settings.breakMinutes = 45;
+  assert.equal(core.dailyTotal(rec, emp, { workHours: 8, breakMinutes: 60 }).ot, 2500);  // 不足1.0h
+  assert.equal(core.dailyTotal(rec, emp, { workHours: 8, breakMinutes: 45 }).ot, 1875);  // 不足0.75h
+  core.STATE.settings.breakMinutes = 60;
+});
+
+test('バックアップ検証: 端末の所定労働時間を変えても自分の控えが復元できる', () => {
+  const emp = { id: 'emp-1', name: 'A', dailyWage: 18000, nightWage: 0, payWage: 0, payNightWage: 0 };
+  const rec = { id: 'r1', employeeId: 'emp-1', date: '2026-08-03',
+    attendance: 1, overtimeHours: 1, nightAttendance: 0, nightOvertimeHours: 0, transportFee: 0 };
+  // 所定7.5時間の端末で発行した控え
+  const snapshot = {
+    settings: { workHours: 7.5, breakMinutes: 60, taxRate: 10, closingDay: 31 },
+    reports: [{ emp, rep: {
+      employeeId: 'emp-1', totalAttendance: 1, totalNightAttendance: 0,
+      totalDailyWage: 18000, totalOvertimePay: 3000, totalNightWage: 0,
+      totalNightOvertimePay: 0, totalTransportFee: 0, grandTotal: 21000, records: [rec] } }],
+  };
+  core.STATE.settings.workHours = 8;          // 復元する端末は所定8時間
+  const out = core.normalizeBackupSnapshot(JSON.parse(JSON.stringify(snapshot)), 0, false);
+  assert.equal(out.reports[0].rep.totalOvertimePay, 3000, '控えの金額が書き換わっている');
+  assert.equal(out.settings.workHours, 7.5);
+  // 逆に、控えの設定でも辻褄が合わない金額は今までどおり拒否する
+  const bad = JSON.parse(JSON.stringify(snapshot));
+  bad.reports[0].rep.totalOvertimePay = 9999; bad.reports[0].rep.grandTotal = 27999;
+  assert.throws(() => core.normalizeBackupSnapshot(bad, 0, false), /集計値が勤怠明細と一致しません/);
 });

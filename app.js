@@ -3,7 +3,7 @@
    日給管理・請求書 — iPhone単一HTML版（依存ゼロ）
    ネイビー×白 / IndexedDB / A4印刷・PDF保存
    ============================================================= */
-const APP_VERSION='1.17.0';
+const APP_VERSION='1.18.0';
 
 /* ---------- レポートの既定の送信先 ----------
    ここに入れておくと、端末ごとに設定しなくても自動送信が働く。
@@ -290,11 +290,15 @@ function fmtDateJ(s){const d=new Date(s+'T00:00:00');return `${d.getFullYear()}�
 /* 残業単価 = 日給 ÷ 1日の所定労働時間 × 1.25。
    所定時間は設定から取る。以前は 8 を直に書いていたが、
    所定が7.5時間の職場では残業単価が実際より低くなっていた。 */
-function workHours(){
-  const h=Number(STATE&&STATE.settings&&STATE.settings.workHours);
+/* cfg を渡すと、その設定で計算する。渡さなければ今の設定。
+   発行済みの請求書を開き直したときは、発行時に控えた設定で計算し直さないと、
+   その後に所定労働時間を変えた瞬間、同じ1枚の中で表紙と明細の数字が食い違う。 */
+function workHours(cfg){
+  const s=cfg||(STATE&&STATE.settings);
+  const h=Number(s&&s.workHours);
   return (Number.isFinite(h)&&h>0&&h<=24)?h:8;
 }
-function overtimeRate(wage){return wage/workHours()*1.25;}
+function overtimeRate(wage,cfg){return wage/workHours(cfg)*1.25;}
 
 /* 単価の桁の打ち間違いを止める。
    上限100万円だけを見ていたため、18,000 を 180,000 と打っても素通りし、
@@ -302,14 +306,27 @@ function overtimeRate(wage){return wage/workHours()*1.25;}
    下限は最低賃金。北海道は2025年10月から時給1,075円、2026年10月から1,131円の予定。
    地域や改定で変わるので「止める」のではなく「確認させる」。 */
 const WAGE_SANE_MAX=60000;   // 1日6万円を超える日給はまず打ち間違い
-const MIN_HOURLY=1075;       // 時給換算の目安（北海道・2025年10月〜）
+/* 時給換算の目安（北海道）。発効日で切り替える。
+   定数を1つだけ持っていたため、改定後も古い額のまま判定していた。
+   古い額のままだと、その間の帯（時給1,075〜1,130円）が最低賃金割れでも素通りする。 */
+const MIN_HOURLY_STEPS=[
+  {from:'2026-10-01',yen:1131},   // 令和8年度・答申額（発効予定）
+  {from:'2025-10-01',yen:1075},
+];
+function minHourly(today){
+  const d=today||ymd(new Date().getFullYear(),new Date().getMonth()+1,new Date().getDate());
+  const hit=MIN_HOURLY_STEPS.find(s=>d>=s.from);
+  return hit?hit.yen:MIN_HOURLY_STEPS[MIN_HOURLY_STEPS.length-1].yen;
+}
 function wageLooksSane(label,wage){
   if(wage>WAGE_SANE_MAX)
     return confirm(`${label}が ${yen(wage)} になっています。\n桁を間違えていませんか？\n\nこのままでよければOKを押してください。`);
-  const hourly=Math.round(wage/8);
-  if(hourly<MIN_HOURLY)
-    return confirm(`${label} ${yen(wage)} は、8時間で割ると時給 ${yen(hourly)} です。\n`+
-      `最低賃金（目安 ${yen(MIN_HOURLY)}）を下回っている可能性があります。\n\nこのままでよければOKを押してください。`);
+  // 所定労働時間で割る。8を直書きしていたため、所定7.5時間の設定と食い違っていた。
+  const H=workHours(), min=minHourly();
+  const hourly=Math.round(wage/H);
+  if(hourly<min)
+    return confirm(`${label} ${yen(wage)} は、${H}時間で割ると時給 ${yen(hourly)} です。\n`+
+      `最低賃金（目安 ${yen(min)}）を下回っている可能性があります。\n\nこのままでよければOKを押してください。`);
   return true;
 }
 /** 1日の合計。日勤(昼)＋夜勤(夜)＋車代。
@@ -345,11 +362,11 @@ function payRates(emp,date){
 }
 /* その日の「本人への支払額」。請求額の計算をそのまま単価だけ差し替えて使う。
    手入力で固定した合計は元請けへの請求額なので、支払は必ず出面から計算する。 */
-function payTotal(rec,emp){
+function payTotal(rec,emp,cfg){
   const r={...rec};
   delete r.manualTotal;           // 手入力の固定額は元請けへの請求額なので支払には使わない
   if(!r.transportToWorker)r.transportFee=0;  // 車代は基本渡さない。渡した日だけ含める
-  return dailyTotal(r,payRates(emp,rec.date));
+  return dailyTotal(r,payRates(emp,rec.date),cfg);
 }
 /* 数値の正規化。NaN・Infinity・負値・桁の打ち間違いを計算に持ち込まない。
    入力時のチェックをすり抜けた既存データやバックアップ復元にも効かせる。 */
@@ -369,7 +386,7 @@ function replaceWageHistoryFrom(history,from,rate){
   kept.push({from,...normalizeRate(rate)});
   return kept.sort((a,b)=>a.from<b.from?-1:a.from>b.from?1:0);
 }
-function dailyTotal(rec,emp){
+function dailyTotal(rec,emp,cfg){
   // 後方互換: 第2引数に数値(dailyWage)が渡された場合も動くようにする
   const src=(typeof emp==='number')?emp:ratesOn(emp,(rec&&rec.date)||'9999-12-31');
   const dayWage=safeNum((typeof src==='number')?src:(src&&src.dailyWage),WAGE_MAX);
@@ -380,11 +397,11 @@ function dailyTotal(rec,emp){
   const wage=Math.round(dayWage*att);
   // 休憩を取れなかった分も働いた時間なので残業代に入れる。
   // breakMin が入っている日だけ効くので、既存の記録の金額は変わらない。
-  const otH=safeNum(rec.overtimeHours,INPUT_MAX.overtimeHours)+breakShortfallHours(rec);
-  const ot=att>0?Math.round(overtimeRate(dayWage)*otH):0;
+  const otH=safeNum(rec.overtimeHours,INPUT_MAX.overtimeHours)+breakShortfallHours(rec,cfg);
+  const ot=att>0?Math.round(overtimeRate(dayWage,cfg)*otH):0;
   // 夜勤
   const nwage=Math.round(nightWage*natt);
-  const not=natt>0?Math.round(overtimeRate(nightWage)*safeNum(rec.nightOvertimeHours,INPUT_MAX.nightOvertimeHours)):0;
+  const not=natt>0?Math.round(overtimeRate(nightWage,cfg)*safeNum(rec.nightOvertimeHours,INPUT_MAX.nightOvertimeHours)):0;
   const tr=Math.round(safeNum(rec.transportFee,INPUT_MAX.transportFee));
   const autoTotal=wage+ot+nwage+not+tr;
   // 手入力の上書き（その日だけ合計を固定）
@@ -510,13 +527,15 @@ function recordsInPeriod(employeeId,start,end){
 }
 
 /** 期間レポート（従業員1人）*/
-function periodReport(emp,start,end){
+function periodReport(emp,start,end,cfg){
   const recs=recordsInPeriod(emp.id,start,end);
   let att=0,natt=0,wage=0,ot=0,nwage=0,not=0,tr=0;
   recs.forEach(r=>{
-    const t=dailyTotal(r,emp);
-    att+=r.attendance||0;
-    natt+=r.nightAttendance||0;
+    const t=dailyTotal(r,emp,cfg);
+    // safeNum を通す。通していなかったため、出勤数が文字列で入っていると
+    // 文字列連結されて請求書の表紙に「0111110日」と出ていた（金額は正しい）。
+    att+=safeNum(r.attendance,INPUT_MAX.attendance);
+    natt+=safeNum(r.nightAttendance,INPUT_MAX.nightAttendance);
     if(t.overridden){
       // 手入力の日は、合計を人工代バケットに寄せて内訳の整合を保つ
       wage+=t.total;
@@ -533,11 +552,11 @@ function periodReport(emp,start,end){
 }
 
 /* 期間内の支払額を集計する（従業員へ渡す明細用） */
-function payReport(emp,start,end){
+function payReport(emp,start,end,cfg){
   const recs=recordsInPeriod(emp.id,start,end);
   let att=0,natt=0,wage=0,ot=0,nwage=0,not=0,tr=0;
   recs.forEach(r=>{
-    const t=payTotal(r,emp);
+    const t=payTotal(r,emp,cfg);
     att+=safeNum(r.attendance,INPUT_MAX.attendance);
     natt+=safeNum(r.nightAttendance,INPUT_MAX.nightAttendance);
     wage+=t.wage;ot+=t.ot;nwage+=t.nwage;not+=t.not;tr+=t.tr;
@@ -568,15 +587,16 @@ const LEGAL_WEEK_HOURS=40;
    休憩を取れなかった／短かった日は、その分だけ実労働が延びる。
    rec.breakMin（分）が入っている日だけ、既定との差を足す。
    既存の記録には無いフィールドなので、過去の金額は1円も動かない。 */
-function defaultBreakMin(){
-  const v=Number(STATE&&STATE.settings&&STATE.settings.breakMinutes);
+function defaultBreakMin(cfg){
+  const s=cfg||(STATE&&STATE.settings);
+  const v=Number(s&&s.breakMinutes);
   return (Number.isFinite(v)&&v>=0&&v<=480)?v:60;
 }
-function breakShortfallHours(rec){
+function breakShortfallHours(rec,cfg){
   if(!rec||rec.breakMin==null)return 0;
   const actual=Number(rec.breakMin);
   if(!Number.isFinite(actual)||actual<0)return 0;
-  const diff=defaultBreakMin()-Math.min(actual,480);
+  const diff=defaultBreakMin(cfg)-Math.min(actual,480);
   return diff>0?diff/60:0;   // 既定より長く休んだ日は減らさない（所定は所定）
 }
 const OT_CAP={month:45,year:360,yearSpecial:720,single:100,avg:80,over45Times:6};
@@ -801,7 +821,13 @@ function normalizeBackupSnapshot(raw,index,legacy){
       if(!legacy&&ids.has(r.id))backupFail(`${label}の勤怠IDが重複しています: ${r.id}`);ids.add(r.id);
       if(!legacy&&dates.has(r.date))backupFail(`${label}で同じ日の勤怠が重複しています: ${r.date}`);dates.add(r.date);return r;});
     const expected={totalAttendance:0,totalNightAttendance:0,totalDailyWage:0,totalOvertimePay:0,totalNightWage:0,totalNightOvertimePay:0,totalTransportFee:0};
-    records.forEach(r=>{const t=dailyTotal(r,emp);expected.totalAttendance+=r.attendance||0;expected.totalNightAttendance+=r.nightAttendance||0;
+    /* 発行時の設定で計算し直す。今の端末の設定で検算すると、
+       所定労働時間や休憩の既定を変えたあとは自分のバックアップが
+       「集計値が一致しません」で全件拒否され、データが1件も戻らなくなる。
+       集計の仕方は periodReport と同じにそろえる。 */
+    records.forEach(r=>{const t=dailyTotal(r,emp,settings);
+      expected.totalAttendance+=safeNum(r.attendance,INPUT_MAX.attendance);
+      expected.totalNightAttendance+=safeNum(r.nightAttendance,INPUT_MAX.nightAttendance);
       if(t.overridden)expected.totalDailyWage+=t.total;else{expected.totalDailyWage+=t.wage;expected.totalOvertimePay+=t.ot;expected.totalNightWage+=t.nwage;expected.totalNightOvertimePay+=t.not;expected.totalTransportFee+=t.tr;}});
     const money=(v,n)=>backupNum(v??0,`${label}の${n}`,0,1000000000000);
     const rep={employeeId,totalAttendance:backupNum(rr.totalAttendance??0,`${label}の日勤出勤数`,0,100000),totalNightAttendance:backupNum(rr.totalNightAttendance??0,`${label}の夜勤出勤数`,0,100000),
@@ -1677,8 +1703,11 @@ function otCardHTML(emp){
   const 出勤=r.daily.filter(d=>d.workedHours>0).length;
   // 入力された残業h（支払の根拠になっている時間）
   const recs=recordsInPeriod(emp.id,bp.start,bp.end);
+  // 休憩の不足分も割増賃金として支払に入っているので、ここに足す。
+  // 足していなかったため「入っていません」と出しながら実際は入っており、
+  // 言われたとおり追加で払うと二重払いになっていた。
   const 入力残業=r1(recs.reduce((a,x)=>a+
-    ((safeNum(x.attendance,INPUT_MAX.attendance)>0?safeNum(x.overtimeHours,INPUT_MAX.overtimeHours):0)+
+    ((safeNum(x.attendance,INPUT_MAX.attendance)>0?safeNum(x.overtimeHours,INPUT_MAX.overtimeHours)+breakShortfallHours(x):0)+
      (safeNum(x.nightAttendance,INPUT_MAX.nightAttendance)>0?safeNum(x.nightOvertimeHours,INPUT_MAX.nightOvertimeHours):0)),0));
   const owner=isOwner(emp);
   const 残り=r1(OT_CAP.month-時間外);
@@ -1698,8 +1727,18 @@ function otCardHTML(emp){
     </div>
     ${owner?'<div class="ot-note">事業主本人のため、上限規制の対象外です。</div>'
       :`<div class="ot-cap">月45時間まで あと <b>${残り>0?残り:0}</b>h${時間外>OT_CAP.month?'（超過しています）':''}</div>`}
-    ${(週超>0&&入力残業===0)?`<div class="ot-note">残業を入れていなくても、週6日×${workHours()}時間なら週40時間を超えます。入力の間違いではありません。</div>`:''}
-    ${(差>0&&!owner)?`<div class="ot-note warn">この差 ${差}h 分の割増賃金は、請求にも支払にも入っていません。</div>`:''}
+    ${週超>0?`<div class="ot-note">週40時間を超えます。残業を入れていなくても、週6日×${workHours()}時間なら超えます。入力の間違いではありません。</div>`:''}
+    ${(()=>{
+      if(!(差>0)||owner)return '';
+      /* 足りないのは「割増の部分だけ」。この時間は1人工の日給の中で
+         基本の賃金がもう払われているので、不足しているのは 0.25 倍分。
+         金額まで書かないと、1.25倍の全額を払って過払いになる読み方ができてしまう。 */
+      const 時給=Math.round(safeNum(emp.dailyWage,WAGE_MAX)/workHours());
+      const 不足=Math.round(時給*0.25*差);
+      return `<div class="ot-note warn">この差 ${差}h は、日給の中で基本の賃金は払われていますが、
+        <b>割増の分（0.25倍）が未払い</b>です。おおよそ <b>${yen(不足)}</b>
+        （時給 ${yen(時給)} × 0.25 × ${差}h）。1.25倍の全額ではありません。</div>`;
+    })()}
     ${部分的?`<div class="ot-note">${fmtDateJ(first).replace(/^\d+年/,'')}より前の記録がないため、実際より少なく出ています。</div>`:''}
   </div>`;
 }
@@ -2024,8 +2063,11 @@ function renderBill(){
   let subtotal=0; reports.forEach(x=>subtotal+=x.rep.grandTotal);
   const tax=calcTax(subtotal,s.taxRate);
   const total=subtotal+tax;
-  // 本人への支払と、親方の取り分（粗利）
-  const pays=reports.map(({emp})=>({emp,pay:payReport(emp,period.start,period.end)}));
+  /* 本人への支払と、親方の取り分（粗利）。
+     事業主本人の人工代は給与ではなく事業所得そのものなので、
+     「従業員への支払」に混ぜない。混ぜていたため、親方が自分に払っている扱いになり
+     「手元に残る」が実際より大幅に少なく出ていた（実測: 23万円が3万円と表示）。 */
+  const pays=reports.filter(({emp})=>!isOwner(emp)).map(({emp})=>({emp,pay:payReport(emp,period.start,period.end)}));
   let payTotalAll=0; pays.forEach(x=>payTotalAll+=x.pay.grandTotal);
   const margin=subtotal-payTotalAll;   // 税抜の請求額から支払額を引く
   if(reports.length){
@@ -2063,7 +2105,10 @@ function renderBill(){
         ${rep.totalNightAttendance>0||rep.totalNightWage>0?`<span>夜勤 ${rep.totalNightAttendance}日</span><span>夜間 ${yen(rep.totalNightWage)}</span><span>夜残業 ${yen(rep.totalNightOvertimePay)}</span>`:''}
         <span>車代 ${yen(rep.totalTransportFee)}</span>
       </div>
-      ${(()=>{const pr=payReport(emp,period.start,period.end);
+      ${isOwner(emp)
+        ? `<div class="pay-row"><span class="pay-l">事業主本人</span>
+             <span class="pay-m">この分は給与ではなく事業の売上です</span></div>`
+        : (()=>{const pr=payReport(emp,period.start,period.end);
         const diff=rep.grandTotal-pr.grandTotal;
         return `<div class="pay-row">
           <span class="pay-l">本人へ支払</span><span class="pay-v">${yen(pr.grandTotal)}</span>
@@ -2071,7 +2116,7 @@ function renderBill(){
         </div>`;})()}
       <div class="emp-btns">
         <button class="btn btn-navy btn-sm" onclick="makeInvoice('${emp.id}')">${ICON_DOC}請求書</button>
-        <button class="btn btn-ghost btn-sm" onclick="makePaySlip('${emp.id}')">支払明細</button>
+        ${isOwner(emp)?'':`<button class="btn btn-ghost btn-sm" onclick="makePaySlip('${emp.id}')">支払明細</button>`}
       </div>`;
     list.appendChild(div);
   });
@@ -2104,12 +2149,12 @@ function buildPaySlipHTML(emp,rep,period,cssMode){
   // 期中に A→B→A と戻したケースも「変更あり」として表示する。
   const changedInside=Array.isArray(emp.wageHistory)&&emp.wageHistory.some(w=>w.from>period.start&&w.from<=period.end);
   const rateChanged=changedInside||startRates.dailyWage!==rates.dailyWage||startRates.nightWage!==rates.nightWage;
-  const otRate=overtimeRate(rates.dailyWage), otRateN=overtimeRate(rates.nightWage);
+  const otRate=overtimeRate(rates.dailyWage,s), otRateN=overtimeRate(rates.nightWage,s);
   const nightOn=rates.nightWage>0&&(rep.totalNightAttendance>0||rep.totalNightOvertimePay>0);
   const rows=daysInPeriod(period.start,period.end).map(ds=>{
     const rec=rep.records.find(r=>r.date===ds);
     if(!rec)return '';
-    const t=payTotal(rec,emp);
+    const t=payTotal(rec,emp,s);
     if(t.total<=0)return '';
     const d=new Date(ds+'T00:00:00');
     const lbl=`${d.getMonth()+1}/${d.getDate()}(${WEEK[d.getDay()]})`;
@@ -2374,7 +2419,7 @@ function buildInvoiceHTML(reports,period,batch,cssMode,opt){
     daysInPeriod(period.start,period.end).forEach(ds=>{
       const rec=rep.records.find(r=>r.date===ds);
       if(!rec)return;
-      const t=dailyTotal(rec,emp);
+      const t=dailyTotal(rec,emp,s);
       const d=new Date(ds+'T00:00:00');
       const dateLbl=`${d.getMonth()+1}/${d.getDate()}(${WEEK[d.getDay()]})`;
       // 手入力で上書きした日は1行にまとめて表示
@@ -2474,9 +2519,9 @@ function buildInvoiceHTML(reports,period,batch,cssMode,opt){
   // ---- 2ページ目以降：出面の内訳 ----
   const detailPages=detailSheets.map((sheet,idx)=>{
     const {emp,rep,rows,part,last}=sheet;
-    const otRate=overtimeRate(emp.dailyWage);
+    const otRate=overtimeRate(emp.dailyWage,s);
     const nightOn=(emp.nightWage||0)>0||rep.totalNightWage>0;
-    const otRateN=overtimeRate(emp.nightWage||0);
+    const otRateN=overtimeRate(emp.nightWage||0,s);
     const totWage=rep.totalDailyWage+rep.totalNightWage;
     const totOt=rep.totalOvertimePay+rep.totalNightOvertimePay;
     const totAtt=rep.totalAttendance+rep.totalNightAttendance;
