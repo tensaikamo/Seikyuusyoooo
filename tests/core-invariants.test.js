@@ -230,11 +230,17 @@ test('発行履歴の永続化完了後にだけ印刷へ進む', () => {
   const end = src.indexOf("\n});", start);
   assert.notEqual(end, -1, '印刷ハンドラ終端が見つからない');
   const handler = src.slice(start, end);
-  const save = handler.indexOf('await saveInvoiceLog();');
+  // saveInvoiceLog は失敗しても投げずに false を返すので、
+  // await するだけでは足りない。戻り値を見ていることまで確かめる。
+  const save = handler.indexOf('await saveInvoiceLog()');
   const print = handler.indexOf('window.print();');
   const rollback = handler.indexOf('STATE.invoiceLog.splice(i,1);');
   const activationGuard = handler.indexOf('navigator.userActivation');
   assert.ok(save >= 0, 'invoiceLog 保存を await していない');
+  assert.match(handler, /if\s*\(\s*!\s*await saveInvoiceLog\(\)\s*\)/,
+    'saveInvoiceLog の戻り値を見ていない（try/catch では失敗を捕まえられない）');
+  assert.ok(!/try\{[^}]*await saveInvoiceLog/.test(handler),
+    'try/catch で保存失敗を捕まえようとしている（catch に入らない）');
   assert.ok(print > save, '保存完了より先に印刷へ進んでいる');
   assert.ok(rollback > save, '保存失敗時のメモリ上の履歴巻き戻しがない');
   assert.ok(activationGuard > save && activationGuard < print, '保存待ちでユーザー操作状態が失効した場合の印刷フォールバックがない');
@@ -552,12 +558,12 @@ test('リリース表記は実際の印刷/PDF保存方式と一致する', () =
   const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
   const manifest = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'manifest.json'), 'utf8'));
   const sw = fs.readFileSync(path.join(__dirname, '..', 'sw.js'), 'utf8');
-  assert.match(app, /const APP_VERSION='1\.16\.0';/);
+  assert.match(app, /const APP_VERSION='1\.17\.0';/);
   assert.doesNotMatch(app, /A4 2ページPDF/);
   assert.doesNotMatch(html, /A4 2ページPDF/);
   assert.equal(manifest.description.includes('A4 2ページPDF'), false);
   assert.match(html, /まとめ請求書を保存・印刷/);
-  assert.match(sw, /const CACHE='invoice-v29';/);
+  assert.match(sw, /const CACHE='invoice-v30';/);
 });
 
 

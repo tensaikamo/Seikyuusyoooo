@@ -3,7 +3,7 @@
    日給管理・請求書 — iPhone単一HTML版（依存ゼロ）
    ネイビー×白 / IndexedDB / A4印刷・PDF保存
    ============================================================= */
-const APP_VERSION='1.16.0';
+const APP_VERSION='1.17.0';
 
 /* ---------- レポートの既定の送信先 ----------
    ここに入れておくと、端末ごとに設定しなくても自動送信が働く。
@@ -25,8 +25,41 @@ const DB='salary-db',STORE='kv';let _dbp=null;
 function db(){if(_dbp)return _dbp;_dbp=new Promise((res,rej)=>{const r=indexedDB.open(DB,1);r.onupgradeneeded=()=>{if(!r.result.objectStoreNames.contains(STORE))r.result.createObjectStore(STORE);};r.onsuccess=()=>res(r.result);r.onerror=()=>rej(r.error);});return _dbp;}
 function idbGet(k){return db().then(d=>new Promise((res,rej)=>{const r=d.transaction(STORE,'readonly').objectStore(STORE).get(k);r.onsuccess=()=>res(r.result);r.onerror=()=>rej(r.error);}));}
 function idbSet(k,v){return db().then(d=>new Promise((res,rej)=>{const t=d.transaction(STORE,'readwrite');t.objectStore(STORE).put(v,k);t.oncomplete=()=>res();t.onerror=()=>rej(t.error);}));}
-/* 復元は全キーを1つのtransactionで入れ替える。途中失敗で一部だけ新旧が混ざらない。 */
-function idbSetMany(entries){return db().then(d=>new Promise((res,rej)=>{const t=d.transaction(STORE,'readwrite'),s=t.objectStore(STORE);entries.forEach(([k,v])=>s.put(v,k));t.oncomplete=()=>res();t.onabort=()=>rej(t.error||new Error('保存を中断しました'));t.onerror=()=>rej(t.error);}));}
+/* 復元は全キーを1つのtransactionで入れ替える。途中失敗で一部だけ新旧が混ざらない。
+   put が同期例外を投げると、それより前にキューした分だけが commit されてしまうため、
+   自分で abort してから投げ直す。 */
+function idbSetMany(entries){return db().then(d=>new Promise((res,rej)=>{
+  const t=d.transaction(STORE,'readwrite'),s=t.objectStore(STORE);
+  const next=uid();
+  try{entries.forEach(([k,v])=>s.put(v,k));s.put(next,'rev');}
+  catch(e){try{t.abort();}catch(_){}rej(e);return;}
+  // rev は commit できたときだけ進める。中断したのに進めると、
+  // 次の保存で「別画面が書いた」と誤検知する。
+  t.oncomplete=()=>{myRev=next;res();};t.onabort=()=>rej(t.error||new Error('保存を中断しました'));t.onerror=()=>rej(t.error);
+}));}
+
+/* ---------- 別の画面からの上書きを止める ----------
+   勤怠は配列まるごとを1つのキーに書くので、Safariのタブとホーム画面アプリを
+   両方開いていると、後から保存したほうが相手の入力を丸ごと消してしまう。
+   書き込みのたびに合言葉（rev）を進め、読み書きを同じtransactionで行うことで、
+   自分が知らない書き込みがあったかどうかを取りこぼしなく判定する。 */
+let myRev='';
+function idbSetChecked(k,v){return db().then(d=>new Promise((res,rej)=>{
+  const t=d.transaction(STORE,'readwrite'),s=t.objectStore(STORE),next=uid();
+  let stale=false;
+  const g=s.get('rev');
+  g.onsuccess=()=>{
+    const cur=g.result==null?'':String(g.result);
+    // 空＝この端末で初めて書く（旧版から使い続けている場合）。そのまま進む。
+    if(cur&&cur!==myRev){stale=true;try{t.abort();}catch(e){}return;}
+    try{s.put(v,k);s.put(next,'rev');}catch(e){try{t.abort();}catch(_){}}
+  };
+  // rev を進めるのは commit できたときだけ。中断したのに進めると、
+  // 次の保存で「別画面が書いた」と誤検知して保存を止めてしまう。
+  t.oncomplete=()=>{myRev=next;res();};
+  t.onabort=()=>rej(stale?Object.assign(new Error('他の画面で変更されています'),{name:'StaleWrite'}):(t.error||new Error('保存を中断しました')));
+  t.onerror=()=>rej(t.error);
+}));}
 function idbClear(){return db().then(d=>new Promise((res,rej)=>{const t=d.transaction(STORE,'readwrite');t.objectStore(STORE).clear();t.oncomplete=()=>res();t.onerror=()=>rej(t.error);}));}
 
 /* ---------- id ---------- */
@@ -91,45 +124,95 @@ function idx(){
    以前は保存が失敗しても画面の数字は更新されたままで、警告も出なかった。
    端末の空きが尽きると「入れたのに翌朝には消えている」が起きる。
    一度でも失敗したら、消えるまで画面上部に警告を出し続ける。 */
-let saveBroken=false;
+/* 失敗したキーを覚えておく。以前は別のキーが1つ保存できただけで警告が消えていたので、
+   勤怠が保存できていないのにバナーが一瞬で引っ込んでいた。 */
+const saveBrokenKeys=new Set();
+// 保存を止める理由。止めている間は本物のデータに書き込ませない。
+let writeBlock='';
+function showBar(msg){const bar=$('save-alert');if(bar){bar.textContent=msg;bar.classList.add('show');}}
+function hideBar(){const bar=$('save-alert');if(bar)bar.classList.remove('show');}
+function refreshBar(){
+  if(writeBlock)return;                       // 停止中の文言を消さない
+  if(saveBrokenKeys.size){
+    showBar('⚠️ '+[...saveBrokenKeys].join('・')+'を保存できていません。端末の空き容量を確認してください。'+
+      'この状態で入力を続けると、閉じたときに消えます。');
+  }else hideBar();
+}
+/* 読み出せなかった／別の画面に追い越された状態で保存すると、
+   ディスクにある本物のデータを空の初期値や古い内容で上書きしてしまう。
+   そうなったら以後いっさい書かせない。復元とリセットだけは通す（復旧の手段なので）。 */
+function blockWrites(reason,msg){
+  if(writeBlock)return;
+  writeBlock=reason;
+  try{logUse('保存停止',reason);}catch(e){}
+  showBar(msg);
+}
 function saveFailed(what,err){
-  saveBroken=true;
-  try{logUse('保存失敗',what+' / '+(err&&err.name||err));}catch(e){}
-  const bar=$('save-alert');
-  if(bar){
-    bar.textContent='⚠️ 保存できていません。端末の空き容量を確認してください。'+
-      'この状態で入力を続けると、閉じたときに消えます。';
-    bar.classList.add('show');
+  if(err&&err.name==='StaleWrite'){
+    blockWrites('別画面',
+      '⚠️ 別の画面（もう一つのタブ／ホーム画面のアプリ）でデータが変わりました。'+
+      'この画面の内容は古いので、上書きしないよう保存を止めています。'+
+      'このアプリを閉じて開き直してください。');
+    return;
   }
+  saveBrokenKeys.add(what);
+  try{logUse('保存失敗',what+' / '+(err&&err.name||err));}catch(e){}
+  refreshBar();
   try{toast('⚠️ 保存できませんでした');}catch(e){}
 }
-// 保存が通ったら警告を消す（空きを空けて復帰した場合）
-function saveOK(){
-  if(!saveBroken)return;
-  saveBroken=false;
-  const bar=$('save-alert');if(bar)bar.classList.remove('show');
+// そのキーが保存できたら、そのキーの分だけ警告を下ろす
+function saveOK(what){
+  if(!saveBrokenKeys.delete(what))return;
+  refreshBar();
 }
 /* 失敗しても投げ返さない。呼び出し側は誰も catch していないので、
    投げると未処理の拒否が積み上がるだけで、画面の警告以上のことは起きない。
-   成否は真偽値で返し、確かめたい所（復元など）だけが見る。 */
+   成否は真偽値で返し、確かめたい所（発行・復元など）だけが見る。 */
 function guard(what,p){
-  return Promise.resolve(p).then(()=>{saveOK();return true;},e=>{saveFailed(what,e);return false;});
+  return Promise.resolve(p).then(()=>{saveOK(what);return true;},e=>{saveFailed(what,e);return false;});
 }
-const saveEmployees=()=>{invalidateIdx();return guard('従業員',idbSet('employees',STATE.employees));};
-const saveRecords=()=>{invalidateIdx();return guard('勤怠',idbSet('records',STATE.records));};
-const saveSettings=()=>{dashDirty=true;attDirty=true;return guard('設定',idbSet('settings',STATE.settings));};
-const saveInvoiceLog=()=>guard('発行履歴',idbSet('invoiceLog',STATE.invoiceLog));
-const saveReady=()=>guard('初期化',idbSet('ready',STATE.ready));
+// 保存を止めているあいだは、書きにいかずに false を返す
+function saveKey(what,key,val){
+  if(writeBlock)return Promise.resolve(false);
+  return guard(what,idbSetChecked(key,val));
+}
+const saveEmployees=()=>{invalidateIdx();return saveKey('従業員','employees',STATE.employees);};
+const saveRecords=()=>{invalidateIdx();return saveKey('勤怠','records',STATE.records);};
+const saveSettings=()=>{dashDirty=true;attDirty=true;return saveKey('設定','settings',STATE.settings);};
+const saveInvoiceLog=()=>saveKey('発行履歴','invoiceLog',STATE.invoiceLog);
+const saveReady=()=>saveKey('初期化','ready',STATE.ready);
 
 /* ---------- 利用の記録 ----------
    端末の中だけに貯める。送信は本人が設定タブでボタンを押したときだけ行う。
    自動でどこかへ送ることはしない。 */
 const USAGE_MAX=400;
 let usageDirty=false;
-function logUse(kind,detail){
+/* ---------- 記録する文字列から個人情報を落とす ----------
+   警告やエラーの文には従業員の実名が入ることがある（「山田太郎の単価履歴が…」）。
+   それがそのまま利用レポートに載ると、「氏名・金額・取引先は入りません」という
+   画面の説明が嘘になる。送るときではなく記録するときに落とす。 */
+function piiWords(){
+  const out=[],push=v=>{v=String(v==null?'':v).trim();if(v.length>=2)out.push(v);};
+  try{
+    (STATE.employees||[]).forEach(e=>push(e&&e.name));
+    const s=STATE.settings||{};
+    [s.issuer,s.client,s.bank].forEach(o=>{if(o&&typeof o==='object')Object.keys(o).forEach(k=>push(o[k]));});
+  }catch(e){}
+  return out.sort((a,b)=>b.length-a.length);   // 長いものから消す（部分一致で取り残さない）
+}
+function scrubPII(s){
+  let t=String(s==null?'':s);
+  for(const w of piiWords()){
+    let i;while((i=t.indexOf(w))>=0)t=t.slice(0,i)+'〓'+t.slice(i+w.length);
+  }
+  // 金額・口座番号・登録番号・日付など、桁の並びは中身を見ずに潰す
+  return t.replace(/\d{4,}/g,'〓').replace(/\d{1,3}([-/])\d{1,2}\1\d{1,2}/g,'〓');
+}
+/* extra は桁を潰したくないもの（エラーの行番号など）。scrub の後ろに足す。 */
+function logUse(kind,detail,extra){
   try{
     if(!Array.isArray(STATE.usageLog))STATE.usageLog=[];
-    STATE.usageLog.push({t:Date.now(),k:kind,v:detail==null?'':String(detail).slice(0,200)});
+    STATE.usageLog.push({t:Date.now(),k:kind,v:(scrubPII(detail)+(extra==null?'':' '+extra)).slice(0,200)});
     if(STATE.usageLog.length>USAGE_MAX)STATE.usageLog=STATE.usageLog.slice(-USAGE_MAX);
     usageDirty=true;
   }catch(e){}
@@ -139,7 +222,7 @@ const saveUsage=()=>{usageDirty=false;return idbSet('usageLog',STATE.usageLog);}
 setInterval(()=>{if(usageDirty)saveUsage();},20000);
 window.addEventListener('pagehide',()=>{if(usageDirty)saveUsage();});
 // 気づかれない不具合を拾うため、エラーは必ず記録する
-window.addEventListener('error',e=>logUse('error',`${e.message} @${(e.filename||'').split('/').pop()}:${e.lineno}`));
+window.addEventListener('error',e=>logUse('error',e.message,`@${(e.filename||'').split('/').pop()}:${e.lineno}`));
 window.addEventListener('unhandledrejection',e=>logUse('error','promise: '+(e.reason&&e.reason.message||e.reason)));
 
 /* ---------- 詰まりどころの記録 ----------
@@ -793,8 +876,11 @@ function mergeInvoiceLogs(current,incoming){
 window.addEventListener('load',boot);
 async function boot(){
   try{if(navigator.storage&&navigator.storage.persist){if(!(await navigator.storage.persisted()))await navigator.storage.persist();}}catch(e){}
+  let loaded=false;
   try{
-    const [emps,recs,set,ready,ilog]=await Promise.all([idbGet('employees'),idbGet('records'),idbGet('settings'),idbGet('ready'),idbGet('invoiceLog')]);
+    const [emps,recs,set,ready,ilog,rev]=await Promise.all([idbGet('employees'),idbGet('records'),idbGet('settings'),idbGet('ready'),idbGet('invoiceLog'),idbGet('rev')]);
+    loaded=true;
+    myRev=rev==null?'':String(rev);
     if(emps)STATE.employees=emps;
     if(recs)STATE.records=recs;
     if(set)STATE.settings=mergeSettings(set);
@@ -818,8 +904,19 @@ async function boot(){
       STATE.reportDest.auto=!!DEFAULT_REPORT.url&&DEFAULT_REPORT.auto;
       STATE.reportDest.autoData=DEFAULT_REPORT.autoData;
     }
-    if(!ready) await migrate();
-  }catch(e){toast('⚠️ データ読込エラー');}
+    /* 旧版（localStorage）からの取り込みは、IndexedDB が本当に空のときだけ。
+       以前は ready の書き込みが1回失敗しただけで毎回の起動で発火し、
+       今のデータを旧データで上書きし続けていた。 */
+    if(!ready&&!emps&&!recs&&!(Array.isArray(ilog)&&ilog.length)) await migrate();
+  }catch(e){
+    toast('⚠️ データ読込エラー');
+    /* ここで黙って続けると、画面は「データなし」になり、
+       利用者が1件でも入力した時点で本物のデータが空で上書きされる。 */
+    if(!loaded)blockWrites('読込失敗',
+      '⚠️ 保存してあるデータを読み出せませんでした。このまま入力すると'+
+      '元のデータが消えるため、保存を止めています。'+
+      'アプリを閉じて開き直してください。直らないときはバックアップから復元してください。');
+  }
   invalidateIdx();
   // 更新の検出。以前は register するだけで、新しい版が出ても端末が気づかず
   // 「アップデートされない」状態になっていた。
@@ -871,7 +968,19 @@ async function migrate(){
     if(e){STATE.employees=JSON.parse(e);did=true;}
     if(r){STATE.records=JSON.parse(r);did=true;}
     if(s){STATE.settings=mergeSettings(JSON.parse(s));did=true;}
-    if(did){STATE.ready=true;await Promise.all([saveEmployees(),saveRecords(),saveSettings(),saveReady()]);}
+    if(did){
+      STATE.ready=true;
+      const ok=(await Promise.all([saveEmployees(),saveRecords(),saveSettings(),saveReady()])).every(Boolean);
+      /* 取り込めたら旧キーに印をつける。消さずに残すのは、
+         万一取り込みがおかしくても元が手元に残るようにするため。
+         印がある＝二度と取り込まない。 */
+      if(ok)['employees','records','settings'].forEach(k=>{
+        try{
+          const v=localStorage.getItem('salary_manager_'+k);
+          if(v!=null){localStorage.setItem('salary_manager_'+k+'__migrated',v);localStorage.removeItem('salary_manager_'+k);}
+        }catch(e){}
+      });
+    }
   }catch(e){}
 }
 
@@ -2177,10 +2286,11 @@ $('pv-print').addEventListener('click',async()=>{
   if(pendingIssue&&!pendingLogged){
     const issue=pendingIssue;
     STATE.invoiceLog.push(issue);
-    try{
-      // 履歴の保存完了を「発行」の成立条件にする。
-      await saveInvoiceLog();
-    }catch(e){
+    /* 履歴の保存完了を「発行」の成立条件にする。
+       saveInvoiceLog は失敗しても投げずに false を返すので、戻り値で判定する。
+       以前は try/catch で待っていて、catch に入ることが無く、
+       控えが1件も残らないまま「記録しました」と出て印刷に進んでいた。 */
+    if(!await saveInvoiceLog()){
       const i=STATE.invoiceLog.lastIndexOf(issue);
       if(i>=0)STATE.invoiceLog.splice(i,1);
       if(btn)btn.disabled=false;
@@ -3098,8 +3208,8 @@ async function voidIssue(id){
     voidOperator:operator.trim(),voidedAt,voidOf:o.id,snapshot:null
   };
   STATE.invoiceLog.push(cancellation);
-  try{await saveInvoiceLog();}
-  catch(e){const i=STATE.invoiceLog.lastIndexOf(cancellation);if(i>=0)STATE.invoiceLog.splice(i,1);toast('⚠️ 取消記録を保存できませんでした。取消は成立していません');return;}
+  // 発行と同じく、戻り値で判定する（saveInvoiceLog は投げない）
+  if(!await saveInvoiceLog()){const i=STATE.invoiceLog.lastIndexOf(cancellation);if(i>=0)STATE.invoiceLog.splice(i,1);toast('⚠️ 取消記録を保存できませんでした。取消は成立していません');return;}
   renderInvoiceLog();
   toast('取消記録を追記しました');
 }
