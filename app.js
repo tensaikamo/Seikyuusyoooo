@@ -3,7 +3,7 @@
    日給管理・請求書 — iPhone単一HTML版（依存ゼロ）
    ネイビー×白 / IndexedDB / A4印刷・PDF保存
    ============================================================= */
-const APP_VERSION='1.19.0';
+const APP_VERSION='1.20.0';
 
 /* ---------- レポートの既定の送信先 ----------
    ここに入れておくと、端末ごとに設定しなくても自動送信が働く。
@@ -77,6 +77,9 @@ const DEFAULT_SETTINGS={
   breakMinutes:60,   // 所定に織り込まれている休憩
   weekStartDow:0,    // 週の始まり。定めが無ければ日曜
   legalRestDow:-1,   // 法定休日の曜日。-1 は決めていない
+  // 36協定の「1年」の起算月。協定で定めた起算日から数えるもので、
+  // 暦年でも会計年度でもない。分からないうちは4月起算で数えて、必ず起算月を画面に出す。
+  agreementStartMonth:4,
   issuer:{companyName:'',postalCode:'',address:'',phone:'',invoiceNumber:''},
   client:{companyName:'',postalCode:'',address:'',contactName:''},
   bank:{bankName:'',branchName:'',accountType:'普通',accountNumber:'',accountHolder:''}
@@ -721,6 +724,62 @@ function overtimeBreakdown(employeeId,startDate,endDate,limits){
     months45Count:months.filter(x=>x.exceeds45).length}};
 }
 
+/* ---------- 36協定の「1年」で数える ----------
+   枠（年360/720時間・月45超は年6回・単月100時間未満・複数月平均80時間以内）は
+   OT_CAP に前から入っていたが、実際に見ていたのは月45時間だけだった。
+   月ごとにしか集計していなかったので、年の数字は原理的に出せなかった。
+
+   「1年」は暦年でも会計年度でもなく、協定で定めた起算日から数える。
+   起算日が分からないうちは4月起算で数え、必ず起算月を画面に出す。
+   起算月より前に記録が無ければ年の数字は必ず過少に出るので、それも隠さない。 */
+function agreementStartMonth(){
+  const m=Number(STATE&&STATE.settings&&STATE.settings.agreementStartMonth);
+  return (Number.isInteger(m)&&m>=1&&m<=12)?m:4;
+}
+// その日を含む協定年度の、最初の月（年・月）を返す
+function agreementYearOf(y,m){
+  const sm=agreementStartMonth();
+  return m>=sm?{y,m:sm}:{y:y-1,m:sm};
+}
+/* 連続する2〜6ヶ月の平均が80時間を超える窓を探す（休日労働を含めて数える）。
+   単月100時間と違い、こちらは「またぐ」ので月単位の判定では出てこない。 */
+function avgOver80Windows(months){
+  const out=[];
+  for(let n=2;n<=6;n++){
+    for(let i=0;i+n<=months.length;i++){
+      const win=months.slice(i,i+n);
+      const avg=win.reduce((a,x)=>a+x.withHoliday,0)/n;
+      if(avg>OT_CAP.avg)out.push({from:win[0].label,to:win[n-1].label,months:n,avg:Math.round(avg*10)/10});
+    }
+  }
+  return out;
+}
+/* 協定年度ぶん（12ヶ月）の集計。viewY/viewM が属する年度を数える。 */
+function yearOvertime(employeeId,y,m){
+  const cfg=otSettings();
+  const a=agreementYearOf(y,m);
+  const first=billingPeriod(a.y,a.m,cfg.closingDay);
+  const lastM=a.m===1?{y:a.y,m:12}:{y:a.y+1,m:a.m-1};
+  const last=billingPeriod(lastM.y,lastM.m,cfg.closingDay);
+  const r=overtimeBreakdown(employeeId,first.start,last.end);
+  // 起算日より前に記録が無ければ、年の数字は必ず過少に出る。断定しない
+  const recs=(idx().byEmp.get(employeeId)||[]);
+  const firstRec=recs.reduce((a2,x)=>(x&&x.date&&(!a2||x.date<a2))?x.date:a2,null);
+  return {
+    startMonth:a.m, startLabel:`${a.y}年${a.m}月`,
+    start:first.start, end:last.end,
+    months:r.months, totals:r.totals,
+    over45:r.totals.months45Count,
+    over45Left:Math.max(0,OT_CAP.over45Times-r.totals.months45Count),
+    single100:r.months.filter(x=>x.exceeds100),
+    avg80:avgOver80Windows(r.months),
+    // 数え始めより前に記録が無い＝まだ年度の途中か、途中から使い始めた
+    partial:!firstRec||firstRec>first.start,
+    coverFrom:firstRec&&firstRec>first.start?firstRec:null,
+  };
+}
+
+
 /* ---------- 請求番号 ---------- */
 function nextInvoiceNumber(log,year){
   const re=new RegExp(`^${year}-(\\d{6})$`);
@@ -762,9 +821,11 @@ function normalizeBackupSettings(raw,legacy=false){
   const brk=backupNum(s.breakMinutes??DEFAULT_SETTINGS.breakMinutes,'休憩の既定',0,480);
   const wsd=backupNum(s.weekStartDow??DEFAULT_SETTINGS.weekStartDow,'週の始まり',0,6);
   const lrd=backupNum(s.legalRestDow??DEFAULT_SETTINGS.legalRestDow,'法定休日',-1,6);
+  const asm=backupNum(s.agreementStartMonth??DEFAULT_SETTINGS.agreementStartMonth,'36協定の起算月',1,12);
+  if(!Number.isInteger(asm))backupFail('36協定の起算月が不正です');
   if(!Number.isInteger(wsd)||!Number.isInteger(lrd))backupFail('曜日の指定が不正です');
   return {defaultTransportFee:backupNum(s.defaultTransportFee??DEFAULT_SETTINGS.defaultTransportFee,'車代の初期値',0,legacy?1000000000000:INPUT_MAX.transportFee),
-    taxRate:tax,closingDay:closing,workHours:wh,breakMinutes:brk,weekStartDow:wsd,legalRestDow:lrd,monthlyGoal:backupNum(s.monthlyGoal??DEFAULT_SETTINGS.monthlyGoal,'月間目標',0,legacy?Number.MAX_SAFE_INTEGER:1000000000000),
+    taxRate:tax,closingDay:closing,workHours:wh,breakMinutes:brk,weekStartDow:wsd,legalRestDow:lrd,agreementStartMonth:asm,monthlyGoal:backupNum(s.monthlyGoal??DEFAULT_SETTINGS.monthlyGoal,'月間目標',0,legacy?Number.MAX_SAFE_INTEGER:1000000000000),
     issuer:{companyName:backupText(issuer.companyName,'自社名',200),postalCode:backupText(issuer.postalCode,'自社郵便番号',40),
       address:backupText(issuer.address,'自社住所',500),phone:backupText(issuer.phone,'電話番号',100),invoiceNumber:backupNoMarkup(issuer.invoiceNumber,'登録番号',100)},
     client:{companyName:backupText(client.companyName,'請求先名',200),postalCode:backupText(client.postalCode,'請求先郵便番号',40),
@@ -1823,6 +1884,39 @@ function otCardHTML(emp){
         （時給 ${yen(時給)} × 0.25 × ${差}h）。1.25倍の全額ではありません。</div>`;
     })()}
     ${部分的?`<div class="ot-note">${fmtDateJ(first).replace(/^\d+年/,'')}より前の記録がないため、実際より少なく出ています。</div>`:''}
+    ${owner?'':otYearHTML(emp)}
+  </div>`;
+}
+/* 協定年度（12ヶ月）の枠。月45時間しか見ていなかったので、
+   年360/720時間・月45超は年6回・単月100時間・複数月平均80時間は
+   数字を持っていながら一度も画面に出ていなかった。 */
+function otYearHTML(emp){
+  const y=yearOvertime(emp.id,viewY,viewM);
+  const 年=y.totals.overtime;
+  const 残=Math.max(0,OT_CAP.year-年);
+  const 超360=年>OT_CAP.year, 超720=年>OT_CAP.yearSpecial;
+  const lv=超720?'ng':(超360?'ng':(年>=OT_CAP.year*0.8?'near':''));
+  const rows=[];
+  rows.push(`<div class="${超360?'ot-y-ng':''}"><span>年間の法定時間外</span><b>${年}h</b>
+    <i>${超720?`年720時間も超えています`:超360?`360時間を超えています（特別条項があれば720時間まで）`:`360時間まで あと ${残}h`}</i></div>`);
+  rows.push(`<div class="${y.over45>OT_CAP.over45Times?'ot-y-ng':''}"><span>月45時間を超えた月</span><b>${y.over45}回</b>
+    <i>${y.over45>OT_CAP.over45Times?'年6回を超えています':`年6回まで あと ${y.over45Left}回`}</i></div>`);
+  if(y.single100.length)
+    rows.push(`<div class="ot-y-ng"><span>単月100時間以上</span><b>${y.single100.length}回</b>
+      <i>${esc(y.single100.map(x=>x.label).join('・'))}（休日労働を含めて数えます）</i></div>`);
+  if(y.avg80.length){
+    const w=y.avg80[0];
+    rows.push(`<div class="ot-y-ng"><span>複数月の平均が80時間超</span><b>${y.avg80.length}件</b>
+      <i>${esc(w.from)}〜${esc(w.to)} の${w.months}ヶ月平均 ${w.avg}h ほか</i></div>`);
+  }
+  return `<div class="ot-year${lv?' '+lv:''}">
+    <div class="ot-y-h">36協定の1年　<span>${esc(y.startLabel)}起算</span></div>
+    <div class="ot-y-rows">${rows.join('')}</div>
+    ${y.partial?`<div class="ot-note">${y.coverFrom
+        ?`${fmtDateJ(y.coverFrom).replace(/^\d+年/,'')}より前の記録がないため、実際より少なく出ています。`
+        :'この年度の記録がまだありません。'}
+      この数字だけで「上限内におさまっている」とは判断できません。</div>`:''}
+    <div class="ot-note">起算月は設定タブで変えられます。36協定で定めた起算日に合わせてください。</div>
   </div>`;
 }
 
@@ -2773,10 +2867,11 @@ function loadSettingsForm(){
   $('set-transport').value=s.defaultTransportFee;$('set-goal').value=s.monthlyGoal||'';
   $('set-workh').value=s.workHours||8;
   $('set-break').value=(s.breakMinutes==null?60:s.breakMinutes);
-  buildDowOptions();
+  buildDowOptions();buildAgStartOptions();
   $('set-weekstart').value=String(s.weekStartDow==null?0:s.weekStartDow);
   $('set-restdow').value=String(s.legalRestDow==null?-1:s.legalRestDow);
-  updateClosingHint();updateWorkhHint();updateRestDowHint();
+  $('set-agstart').value=String(s.agreementStartMonth||4);
+  updateClosingHint();updateWorkhHint();updateRestDowHint();updateAgStartHint();
 }
 /* 所定労働時間を変えると残業単価が変わる。何がどう変わるかを画面に出しておく */
 function updateWorkhHint(){
@@ -2795,6 +2890,19 @@ function buildDowOptions(){
     const none=document.createElement('option');none.value='-1';none.textContent='決めていない';rd.appendChild(none);
     WEEK.forEach((n,i)=>{const o=document.createElement('option');o.value=String(i);o.textContent=n+'曜日';rd.appendChild(o);});
   }
+}
+/* 36協定の「1年」は協定で定めた起算日から数える。暦年でも会計年度でもない。
+   起算月がずれると、45時間を超えた月が1ヶ月ずれて数えられる。 */
+function buildAgStartOptions(){
+  const el=$('set-agstart');if(!el||el.options.length)return;
+  for(let m=1;m<=12;m++){const o=document.createElement('option');o.value=String(m);o.textContent=m+'月';el.appendChild(o);}
+}
+function updateAgStartHint(){
+  const el=$('agstart-hint');if(!el)return;
+  const m=agreementStartMonth();
+  const end=m===1?12:m-1;
+  el.textContent=`${m}月〜翌${end}月を「1年」として、年360時間・月45時間超は年6回までを数えます。`
+    +'36協定の届出に書いた起算日に合わせてください。';
 }
 function updateRestDowHint(){
   const el=$('restdow-hint');if(!el)return;
@@ -2822,6 +2930,9 @@ function bindSettings(){
     }],
     ['set-weekstart',v=>{STATE.settings.weekStartDow=parseInt(v,10)||0;attDirty=true;}],
     ['set-restdow',v=>{STATE.settings.legalRestDow=parseInt(v,10);updateRestDowHint();attDirty=true;}],
+    ['set-agstart',v=>{const n=parseInt(v,10);
+      STATE.settings.agreementStartMonth=(Number.isInteger(n)&&n>=1&&n<=12)?n:4;
+      updateAgStartHint();attDirty=true;}],
     ['set-workh',v=>{
       const h=parseFloat(v);
       STATE.settings.workHours=(Number.isFinite(h)&&h>0&&h<=24)?h:8;

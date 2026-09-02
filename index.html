@@ -472,6 +472,15 @@ textarea:focus{border-color:var(--navy-3);background:#fff;}
 .ot-card.ng .ot-cap{color:var(--danger);font-weight:700;}
 .ot-note{margin-top:8px;font-size:var(--fs-xs);color:var(--sub);line-height:1.6;}
 .ot-note.warn{color:var(--danger);font-weight:700;}
+/* 36協定の1年ぶんの枠。月のカードの中に、区切って重ねる */
+.ot-year{margin-top:11px;padding-top:10px;border-top:1px dashed var(--line-2);}
+.ot-y-h{font-size:var(--fs-xs);font-weight:800;color:var(--mut);letter-spacing:.06em;margin-bottom:7px;}
+.ot-y-h span{font-weight:400;letter-spacing:0;}
+.ot-y-rows>div{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap;padding:3px 0;}
+.ot-y-rows span{font-size:var(--fs-sm);color:var(--sub);min-width:9.5em;}
+.ot-y-rows b{font-size:var(--fs-md);color:var(--ink);font-variant-numeric:tabular-nums;}
+.ot-y-rows i{font-style:normal;font-size:var(--fs-xs);color:var(--mut);}
+.ot-y-rows .ot-y-ng b,.ot-y-rows .ot-y-ng i{color:var(--danger);font-weight:700;}
 .rep-status{font-size:var(--fs-xs);color:var(--sub);margin-top:8px;line-height:1.5;min-height:1em;}
 .rep-status.ok{color:var(--navy-3);font-weight:700;}
 .rep-status.ng{color:var(--danger);font-weight:700;}
@@ -727,6 +736,8 @@ textarea:focus{border-color:var(--navy-3);background:#fff;}
         </div>
         <div class="field"><label class="fl">法定休日（週1日）</label><select id="set-restdow"></select>
           <div class="closing-hint" id="restdow-hint"></div></div>
+        <div class="field"><label class="fl">36協定の1年の起算月</label><select id="set-agstart"></select>
+          <div class="closing-hint" id="agstart-hint"></div></div>
       </div>
       <div id="labor-health" style="display:none;"></div>
       <div id="data-health" style="display:none;"></div>

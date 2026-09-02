@@ -39,7 +39,11 @@ function loadSpec() {
   const expose = `\n;globalThis.__spec = {
     overtimeBreakdown: (typeof overtimeBreakdown === 'function') ? overtimeBreakdown : null,
     STATE: (typeof STATE !== 'undefined') ? STATE : null,
-    invalidateIdx: (typeof invalidateIdx === 'function') ? invalidateIdx : function(){}
+    invalidateIdx: (typeof invalidateIdx === 'function') ? invalidateIdx : function(){},
+    yearOvertime: (typeof yearOvertime === 'function') ? yearOvertime : null,
+    agreementYearOf: (typeof agreementYearOf === 'function') ? agreementYearOf : null,
+    avgOver80Windows: (typeof avgOver80Windows === 'function') ? avgOver80Windows : null,
+    OT_CAP: (typeof OT_CAP !== 'undefined') ? OT_CAP : null
   };`;
 
   const context = {
@@ -895,4 +899,63 @@ test('入力上限いっぱいの残業hでも集計が破綻しない', () => {
   assert.ok(d.workedHours > 0, '上限いっぱいの入力が丸ごと捨てられている');
   assert.ok(near(d.dailyOver, Math.max(0, d.workedHours - 8)),
     '日8時間超の計算が労働時間と合っていない');
+});
+
+
+/* ---- 36協定の「1年」（v1.20.0）----
+   月45時間だけを見ていると、12ヶ月ずっと余裕があるように見えて
+   年360時間を超える。それが数えられることを固定する。 */
+test('yearOvertime: 週6日×8時間・残業入力ゼロで年360時間を超えるが、月45時間は一度も超えない', () => {
+  const S = spec.STATE;
+  S.settings = { ...BASE_SETTINGS, closingDay: 31, agreementStartMonth: 4, weekStartDow: 0, legalRestDow: -1 };
+  S.employees = [{ id: 'e1', name: 'A', dailyWage: 18000, nightWage: 0 }];
+  S.records = [];
+  const d = new Date('2026-04-01T00:00:00'), end = new Date('2027-03-31T00:00:00');
+  let i = 0;
+  for (; d <= end; d.setDate(d.getDate() + 1)) {
+    if (d.getDay() === 0) continue;                        // 日曜だけ休み＝週6日
+    const ds = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+    S.records.push({ id: 'r' + (i++), employeeId: 'e1', date: ds, attendance: 1,
+      overtimeHours: 0, nightAttendance: 0, nightOvertimeHours: 0, transportFee: 0 });
+  }
+  spec.invalidateIdx();
+  const y = spec.yearOvertime('e1', 2026, 8);
+  assert.equal(y.months.length, 12);
+  assert.equal(y.start, '2026-04-01');
+  assert.equal(y.end, '2027-03-31');
+  assert.equal(y.startLabel, '2026年4月');
+  assert.ok(y.totals.overtime > spec.OT_CAP.year, `年${y.totals.overtime}h が360hを超えない`);
+  assert.equal(y.over45, 0, '月45時間を超えた月があってはならない');
+  assert.ok(y.months.every(m => m.overtime < spec.OT_CAP.month),
+    '月ごとは全て45h未満のはず: ' + y.months.map(m => m.overtime).join(','));
+});
+
+test('agreementYearOf: 起算月より前の月は前年度に入る', () => {
+  const S = spec.STATE;
+  S.settings = { ...BASE_SETTINGS, agreementStartMonth: 4 };
+  // VM の外と中では Object.prototype が別なので、値そのものを見る
+  const ay = (y, m) => { const r = spec.agreementYearOf(y, m); return r.y + '-' + r.m; };
+  assert.equal(ay(2026, 4), '2026-4');
+  assert.equal(ay(2026, 3), '2025-4');
+  assert.equal(ay(2026, 12), '2026-4');
+  S.settings = { ...BASE_SETTINGS, agreementStartMonth: 1 };
+  assert.equal(ay(2026, 1), '2026-1');
+  S.settings = { ...BASE_SETTINGS, agreementStartMonth: 10 };
+  assert.equal(ay(2026, 8), '2025-10');
+});
+
+test('avgOver80Windows: 2〜6ヶ月の連続した窓だけを見る（休日労働を含む）', () => {
+  const mk = v => ({ label: 'x', withHoliday: v });
+  // 80ちょうどは「以内」なので違反ではない
+  assert.equal(spec.avgOver80Windows([mk(80), mk(80), mk(80)]).length, 0);
+  // 2ヶ月平均が80.5
+  const w = spec.avgOver80Windows([mk(81), mk(80)]);
+  assert.equal(w.length, 1);
+  assert.equal(w[0].months, 2);
+  assert.equal(w[0].avg, 80.5);
+  // 7ヶ月は窓に含めない（最大6ヶ月）
+  assert.ok(spec.avgOver80Windows(Array.from({length:7}, () => mk(200)))
+    .every(x => x.months >= 2 && x.months <= 6));
+  // 1ヶ月しか無ければ窓が作れない
+  assert.equal(spec.avgOver80Windows([mk(999)]).length, 0);
 });
