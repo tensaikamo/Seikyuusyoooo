@@ -3,7 +3,7 @@
    日給管理・請求書 — iPhone単一HTML版（依存ゼロ）
    ネイビー×白 / IndexedDB / A4印刷・PDF保存
    ============================================================= */
-const APP_VERSION='1.18.0';
+const APP_VERSION='1.19.0';
 
 /* ---------- レポートの既定の送信先 ----------
    ここに入れておくと、端末ごとに設定しなくても自動送信が働く。
@@ -898,10 +898,91 @@ function mergeInvoiceLogs(current,incoming){
   return out.sort((a,b)=>String((a&&a.issuedAt)||'')<String((b&&b.issuedAt)||'')?-1:1);
 }
 
+/* ---------- 保存先の安全性 ----------
+   iOS は Safari のタブで開いているだけのサイトについて、7日間さわらないと
+   IndexedDB を消すことがある（ITP）。ホーム画面に追加してあれば対象から外れる。
+   ところがアプリのどこにも「ホーム画面に追加してください」と書いていなかった。
+   persist() は呼んでいたが戻り値を見ていないので、断られても誰も気づかない。
+   バックアップも、いつ取ったかを記録していないため「3ヶ月取っていない」に
+   気づく手段が無かった。消えるのは導入以来の全部で、外に控えは無い。 */
+let storagePersisted=null;      // true / false / null(不明)
+let lastBackupAt=0;             // 記録するだけ。バックアップの中身には入れない
+const DAY_MS=86400000;
+const BACKUP_STALE_DAYS=30;
+function daysSince(t){return t?Math.max(0,Math.floor((Date.now()-t)/DAY_MS)):null;}
+function isStandalone(){
+  try{
+    if(navigator.standalone)return true;
+    return !!(window.matchMedia&&window.matchMedia('(display-mode: standalone)').matches);
+  }catch(e){return false;}
+}
+function isIOS(){
+  try{
+    if(/iPad|iPhone|iPod/.test(navigator.userAgent))return true;
+    return navigator.platform==='MacIntel'&&navigator.maxTouchPoints>1;   // iPadOS
+  }catch(e){return false;}
+}
+function storageRisk(){
+  const hasData=STATE.employees.length>0||STATE.records.length>0;
+  const days=daysSince(lastBackupAt);
+  return {
+    hasData, days,
+    homeScreen:isStandalone(),
+    persisted:storagePersisted,
+    sevenDay:isIOS()&&!isStandalone(),                       // これがいちばん重い
+    staleBackup:hasData&&(days===null||days>=BACKUP_STALE_DAYS),
+    neverBackedUp:hasData&&days===null,
+  };
+}
+const ADD_TO_HOME='画面下の共有ボタン（□に↑）→「ホーム画面に追加」';
+function storageAlertHTML(){
+  const r=storageRisk();
+  if(!r.hasData)return '';                                   // まだ守るものが無い
+  let html='';
+  if(r.sevenDay){
+    html+=`<div class="warn-card"><b>ホーム画面に追加してください</b><br>
+      いまはブラウザのタブで開いています。この使い方だと、
+      <b>7日間開かないとiPhoneがこのアプリのデータを消すことがあります</b>。
+      消えるのは今までに入れた全部で、他のどこにも控えはありません。<br>
+      ${ADD_TO_HOME}<br>
+      追加したあとは、ホーム画面のアイコンから開いてください。</div>`;
+  }
+  if(r.staleBackup){
+    html+=`<div class="warn-card"><b>バックアップを取ってください</b><br>
+      ${r.neverBackedUp?'まだ一度も保存していません。':`最後に保存したのは <b>${r.days}日前</b> です。`}
+      端末が壊れたり、iPhoneがデータを消したりすると、入れたものは戻せません。<br>
+      設定タブ →「バックアップをファイルに保存」で、ファイルアプリやiCloudに残せます。</div>`;
+  }
+  return html;
+}
+function renderStorageAlert(){
+  const el=$('storage-alert');if(el)el.innerHTML=storageAlertHTML();
+  const d=$('storage-detail');if(d)d.innerHTML=storageDetailHTML();
+}
+function storageDetailHTML(){
+  const r=storageRisk();
+  const where=r.homeScreen?'ホーム画面のアプリとして開いています（消えにくい状態）'
+    :(isIOS()?'ブラウザのタブで開いています。7日間開かないと消えることがあります'
+             :'ブラウザで開いています');
+  const keep=r.persisted===true?'この端末は「消さない」設定を受け入れました'
+    :r.persisted===false?'この端末は「消さない」設定を断りました。バックアップが頼りです'
+    :'「消さない」設定に対応していない端末です';
+  const bk=r.days===null?'<b>まだ一度も保存していません</b>':`${r.days}日前に保存しました`;
+  return `<div class="ebook-note">保存先：${esc(where)}。<br>${esc(keep)}。<br>バックアップ：${bk}</div>`;
+}
+const saveLastBackupAt=()=>{lastBackupAt=Date.now();return idbSet('lastBackupAt',lastBackupAt).catch(()=>{});};
+
 /* ---------- BOOT ---------- */
 window.addEventListener('load',boot);
 async function boot(){
-  try{if(navigator.storage&&navigator.storage.persist){if(!(await navigator.storage.persisted()))await navigator.storage.persist();}}catch(e){}
+  /* 結果を覚えておく。断られたら、その端末はバックアップだけが頼りになる。
+     以前は呼びっぱなしで戻り値を捨てていたので、断られても誰も気づかなかった。 */
+  try{
+    if(navigator.storage&&navigator.storage.persist){
+      storagePersisted=await navigator.storage.persisted();
+      if(!storagePersisted)storagePersisted=await navigator.storage.persist();
+    }
+  }catch(e){storagePersisted=null;}
   let loaded=false;
   try{
     const [emps,recs,set,ready,ilog,rev]=await Promise.all([idbGet('employees'),idbGet('records'),idbGet('settings'),idbGet('ready'),idbGet('invoiceLog'),idbGet('rev')]);
@@ -912,6 +993,8 @@ async function boot(){
     if(set)STATE.settings=mergeSettings(set);
     if(ready)STATE.ready=ready;
     if(Array.isArray(ilog))STATE.invoiceLog=ilog;
+    const lb=await idbGet('lastBackupAt');
+    if(Number.isFinite(Number(lb)))lastBackupAt=Number(lb)||0;
     const ulog=await idbGet('usageLog');
     if(Array.isArray(ulog))STATE.usageLog=ulog;
     const dest=await idbGet('reportDest');
@@ -1083,7 +1166,7 @@ $('hm-next').addEventListener('click',()=>{if(viewM===12){viewM=1;viewY++;}else 
 function updateHeaderMonth(){$('hm-label').textContent=`${viewY}年${viewM}月`;}
 
 /* ---------- RENDER ALL ---------- */
-function renderAll(){updateHeaderMonth();renderEmpRow();renderAtt();}
+function renderAll(){updateHeaderMonth();renderEmpRow();renderAtt();renderStorageAlert();}
 
 /* ===== ホーム（ダッシュボード） ===== */
 const CHART_BLUE='#3f5fa7', CHART_AMBER='#d97e06'; // 配色はCVD/コントラスト検証済み
@@ -3329,6 +3412,7 @@ $('export-btn').addEventListener('click',()=>{
   a.href=url;a.download=`salary-backup-${ymd(new Date().getFullYear(),new Date().getMonth()+1,new Date().getDate())}.json`;
   document.body.appendChild(a);a.click();document.body.removeChild(a);
   setTimeout(()=>URL.revokeObjectURL(url),1500);toast('バックアップを保存しました');
+  saveLastBackupAt().then(renderStorageAlert);
 });
 $('import-btn').addEventListener('click',()=>{
   const inp=document.createElement('input');inp.type='file';inp.accept='application/json,.json';

@@ -619,7 +619,12 @@ textarea:focus{border-color:var(--navy-3);background:#fff;}
 
   <!-- ===== ホーム（ダッシュボード） ===== -->
   <section class="page active" id="page-home">
-    <div class="sc" id="dash-body"></div>
+    <div class="sc">
+      <!-- 保存先の安全性。iOSはSafariのタブだと7日で消すことがあるので、
+           ここだけは隠さずホームの一番上に出す -->
+      <div id="storage-alert"></div>
+      <div id="dash-body"></div>
+    </div>
   </section>
 
   <!-- ===== 勤怠入力 ===== -->
@@ -735,6 +740,7 @@ textarea:focus{border-color:var(--navy-3);background:#fff;}
       <!-- データ -->
       <div class="card">
         <div class="card-t">データ管理</div>
+        <div id="storage-detail"></div>
         <div class="data-btns">
           <button class="btn btn-ghost btn-sm" id="export-btn" type="button"><svg class="ic" viewBox="0 0 24 24"><path d="M12 3.5v9.8M8.2 9.5l3.8 3.8 3.8-3.8"/><path d="M4.5 15v2.9A2.6 2.6 0 0 0 7.1 20.5h9.8a2.6 2.6 0 0 0 2.6-2.6V15"/></svg>バックアップをファイルに保存</button>
           <button class="btn btn-ghost btn-sm" id="import-btn" type="button"><svg class="ic" viewBox="0 0 24 24"><path d="M12 13.3V3.5M8.2 7.3L12 3.5l3.8 3.8"/><path d="M4.5 15v2.9A2.6 2.6 0 0 0 7.1 20.5h9.8a2.6 2.6 0 0 0 2.6-2.6V15"/></svg>バックアップから復元</button>

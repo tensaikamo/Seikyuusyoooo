@@ -4,7 +4,7 @@
 // 以前は全部キャッシュ優先だったため、新しい版を公開しても端末が取りに行かず
 // 更新されないままになっていた。オフライン時だけキャッシュを使う。
 // 画像アイコンは変化しないのでキャッシュ優先のままにする。
-const CACHE='invoice-v31';
+const CACHE='invoice-v32';
 const SHELL=['./','./index.html','./app.js','./manifest.json','./icon-180.png','./icon-192.png','./icon-512.png','./icon-512-maskable.png'];
 
 self.addEventListener('install',e=>{
