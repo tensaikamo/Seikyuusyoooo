@@ -1781,9 +1781,9 @@ function buildPaySlipHTML(emp,rep,period,cssMode){
       <td class="inv-bold">${yen(t.total)}</td></tr>`;
   }).join('');
   const totalDays=rep.totalAttendance+rep.totalNightAttendance;
-  return `<style>${css}</style><div class="inv-page">
+  return `<style>${css}</style><div class="inv-page inv-pay-slip-page">
     <div class="inv-topbar"></div>
-    <div class="inv-inner">
+    <div class="inv-inner inv-pay-slip-inner">
       <div class="inv-p1-top">
         <div><div class="inv-p1-title">支　払　明　細</div><div class="inv-title-en">P A Y M E N T</div></div>
         <div class="inv-p1-meta">対象期間：${period.label}<br>発行日：<b>${fmtDateJ(ymd(new Date().getFullYear(),new Date().getMonth()+1,new Date().getDate()))}</b></div>
@@ -1799,7 +1799,7 @@ function buildPaySlipHTML(emp,rep,period,cssMode){
         <span class="inv-total-sub">出勤 ${totalDays}日</span></span>
       </div>
       <div class="inv-subject"><span>単価</span>日給 ${yen(rates.dailyWage)}／残業 ${yen(Math.round(otRate))}/h${nightOn?`　夜間 ${yen(rates.nightWage)}／夜残業 ${yen(Math.round(otRateN))}/h`:''}${rateChanged?`（期間中に変更あり／期首 日給 ${yen(startRates.dailyWage)}${startRates.nightWage>0?`・夜間 ${yen(startRates.nightWage)}`:''}）`:''}</div>
-      <table class="inv-detail">
+      <table class="inv-detail inv-pay-slip-detail">
         <thead><tr><th class="inv-l">日付</th><th class="inv-c">区分</th><th class="inv-c">出勤</th><th>人工代</th><th>残業代</th><th>車代</th><th>計</th></tr></thead>
         <tbody>${rows}
           <tr class="inv-total-row"><td class="inv-l">合計</td><td></td><td class="inv-c">${totalDays}</td>
@@ -1853,26 +1853,11 @@ function issueFileName(o){
 
 /* 角印風の印影を会社名から組む。発行の瞬間に「ポン」と押される演出に使う。
    （次回の電子印鑑機能でも同じ描画を流用できる形にしてある） */
-function buildSeal(name){
-  const chars=[...(name||'')].filter(c=>!/\s/.test(c)).slice(0,8);
-  if(!chars.length)return '';
-  const cols=chars.length<=4?2:Math.ceil(chars.length/3);
-  const rows=Math.ceil(chars.length/cols);
-  const S=100,pad=13,inner=S-pad*2;
-  const cw=inner/cols,ch=inner/rows;
-  // 縦書きの印相に倣い、右の列から上→下の順に置く
-  const cells=chars.map((c,i)=>{
-    const col=Math.floor(i/rows),row=i%rows;
-    const x=S-pad-cw*(col+.5), y=pad+ch*(row+.5);
-    const size=Math.min(cw,ch)*.92;
-    return `<text x="${x.toFixed(1)}" y="${(y+size*.34).toFixed(1)}" text-anchor="middle"
-      font-size="${size.toFixed(1)}" font-weight="700" fill="#c0392b"
-      font-family="'Hiragino Mincho ProN','Yu Mincho',serif">${esc(c)}</text>`;
-  }).join('');
-  return `<svg class="seal" viewBox="0 0 ${S} ${S}" aria-label="角印 ${esc(name)}">
-    <rect x="3" y="3" width="${S-6}" height="${S-6}" rx="5" fill="rgba(255,255,255,.35)" stroke="#c0392b" stroke-width="5"/>
-    <rect x="9.5" y="9.5" width="${S-19}" height="${S-19}" rx="3" fill="none" stroke="#c0392b" stroke-width="1.4"/>
-    ${cells}
+function buildSeal(){
+  // 会社名を印影として自動生成しない。紙/PDFには実際の判子を押すための空欄だけ残す。
+  return `<svg class="seal" viewBox="0 0 100 100" aria-label="押印欄">
+    <rect x="4" y="4" width="92" height="92" rx="5" fill="rgba(255,255,255,.22)"
+      stroke="#b8bec8" stroke-width="2" stroke-dasharray="7 5"/>
   </svg>`;
 }
 /* 発行の瞬間に角印を押す */
@@ -1945,10 +1930,10 @@ $('pv-print').addEventListener('click',async()=>{
   if(pendingIssue&&!pendingLogged){
     const issue=pendingIssue;
     STATE.invoiceLog.push(issue);
-    try{
-      // 履歴の保存完了を「発行」の成立条件にする。
-      await saveInvoiceLog();
-    }catch(e){
+    // guard() は保存失敗を例外ではなく false で返すため、戻り値まで確認する。
+    let saved=false;
+    try{saved=await saveInvoiceLog();}catch(e){saved=false;}
+    if(!saved){
       const i=STATE.invoiceLog.lastIndexOf(issue);
       if(i>=0)STATE.invoiceLog.splice(i,1);
       if(btn)btn.disabled=false;
@@ -2139,7 +2124,7 @@ function buildInvoiceHTML(reports,period,batch,cssMode,opt){
     const totOt=rep.totalOvertimePay+rep.totalNightOvertimePay;
     const totAtt=rep.totalAttendance+rep.totalNightAttendance;
     const totalRow=last?`<tr class="inv-total-row"><td class="inv-l">合計</td><td></td><td class="inv-c">${totAtt}</td><td>${yen(totWage)}</td><td>${yen(totOt)}</td><td>${yen(rep.totalTransportFee)}</td><td>${yen(rep.grandTotal)}</td></tr>`:'';
-    return `<div class="inv-page">
+    return `<div class="inv-page inv-detail-page">
     <div class="inv-topbar"></div>
     <div class="inv-inner">
       <div class="inv-p2-title">出　面　内　訳</div>
@@ -2167,6 +2152,26 @@ const PRINT_CSS=`
 #print-root *{margin:0;padding:0;box-sizing:border-box;}
 #print-root .inv-page{width:210mm;min-height:297mm;background:#fff;page-break-after:always;position:relative;}
 #print-root .inv-page:last-child{page-break-after:auto;}
+#print-root .inv-detail-page,
+#print-root .inv-pay-slip-page{height:297mm;min-height:297mm;overflow:hidden;}
+/* 支払明細は1日1行なので、31日＋合計行までA4 1枚で読める密度にする。 */
+#print-root .inv-pay-slip-page .inv-topbar{height:4mm;}
+#print-root .inv-pay-slip-page .inv-inner{padding:9mm 12mm 15mm;}
+#print-root .inv-pay-slip-page .inv-p1-top{margin-bottom:4mm;}
+#print-root .inv-pay-slip-page .inv-p1-title{font-size:22pt;letter-spacing:8px;}
+#print-root .inv-pay-slip-page .inv-title-en{font-size:6.5pt;margin-top:1mm;}
+#print-root .inv-pay-slip-page .inv-p1-meta{font-size:7.5pt;line-height:1.55;}
+#print-root .inv-pay-slip-page .inv-parties{margin-bottom:4mm;}
+#print-root .inv-pay-slip-page .inv-client-name{font-size:12pt;padding-bottom:1.5mm;}
+#print-root .inv-pay-slip-page .inv-p1-issuer{min-height:16mm;}
+#print-root .inv-pay-slip-page .inv-amount-row{padding:3mm 1mm;margin-bottom:4mm;}
+#print-root .inv-pay-slip-page .inv-total-amount{font-size:21pt;}
+#print-root .inv-pay-slip-page .inv-subject{font-size:8pt;margin-bottom:3mm;}
+#print-root .inv-pay-slip-page table.inv-pay-slip-detail{margin-bottom:2mm;}
+#print-root .inv-pay-slip-page table.inv-pay-slip-detail thead th{font-size:7pt;padding:0 1.5mm 1mm;}
+#print-root .inv-pay-slip-page table.inv-pay-slip-detail tbody td{font-size:7.2pt;line-height:1.15;padding:.85mm 1.5mm;}
+#print-root .inv-pay-slip-page .inv-detail .inv-total-row td{font-size:7.5pt;padding-top:1.2mm;}
+#print-root .inv-pay-slip-page .inv-p1-foot{bottom:5mm;left:12mm;right:12mm;}
 #print-root .inv-topbar{height:5mm;background:linear-gradient(90deg,#1a2744 0%,#2c3e63 100%);}
 #print-root .inv-inner{padding:15mm 17mm 24mm;}
 #print-root .inv-sans{font-family:'Hiragino Kaku Gothic ProN','Hiragino Sans','Meiryo',sans-serif;}
