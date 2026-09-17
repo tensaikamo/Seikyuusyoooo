@@ -2150,37 +2150,6 @@ const PRINT_CSS=`
 #print-root *{margin:0;padding:0;box-sizing:border-box;}
 #print-root .inv-page{width:210mm;min-height:297mm;background:#fff;page-break-after:always;position:relative;}
 #print-root .inv-page:last-child{page-break-after:auto;}
-#print-root .inv-detail-page,
-#print-root .inv-pay-slip-page{height:297mm;min-height:297mm;overflow:hidden;}
-/* 支払明細は1日1行なので、31日＋合計行までA4 1枚で読める密度にする。 */
-#print-root .inv-pay-slip-page .inv-topbar{height:4mm;}
-#print-root .inv-pay-slip-page .inv-inner{padding:9mm 12mm 15mm;}
-#print-root .inv-pay-slip-page .inv-p1-top{margin-bottom:4mm;}
-#print-root .inv-pay-slip-page .inv-p1-title{font-size:22pt;letter-spacing:8px;}
-#print-root .inv-pay-slip-page .inv-title-en{font-size:6.5pt;margin-top:1mm;}
-#print-root .inv-pay-slip-page .inv-p1-meta{font-size:7.5pt;line-height:1.55;}
-#print-root .inv-pay-slip-page .inv-parties{margin-bottom:4mm;}
-#print-root .inv-pay-slip-page .inv-client-name{font-size:12pt;padding-bottom:1.5mm;}
-#print-root .inv-pay-slip-page .inv-p1-issuer{min-height:16mm;}
-#print-root .inv-pay-slip-page .inv-amount-row{padding:3mm 1mm;margin-bottom:4mm;}
-#print-root .inv-pay-slip-page .inv-total-amount{font-size:21pt;}
-#print-root .inv-pay-slip-page .inv-subject{font-size:8pt;margin-bottom:3mm;}
-#print-root .inv-pay-slip-page table.inv-pay-slip-detail{margin-bottom:2mm;}
-#print-root .inv-pay-slip-page table.inv-pay-slip-detail thead th{font-size:7pt;padding:0 1.5mm 1mm;}
-#print-root .inv-pay-slip-page table.inv-pay-slip-detail tbody td{font-size:7.2pt;line-height:1.15;padding:.85mm 1.5mm;}
-#print-root .inv-pay-slip-page .inv-detail .inv-total-row td{font-size:7.5pt;padding-top:1.2mm;}
-#print-root .inv-pay-slip-page .inv-p1-foot{bottom:5mm;left:12mm;right:12mm;}
-#print-root .inv-detail-page .inv-topbar{height:4mm;}
-#print-root .inv-detail-page .inv-inner{padding:9mm 14mm 15mm;}
-#print-root .inv-detail-page .inv-p2-title{font-size:13pt;margin-bottom:1mm;}
-#print-root .inv-detail-page .inv-p2-sub{margin-bottom:3.5mm;padding-bottom:1.5mm;}
-#print-root .inv-detail-page .inv-emp-block{margin-bottom:3mm;}
-#print-root .inv-detail-page .inv-emp-block-title{margin-bottom:1.5mm;}
-#print-root .inv-detail-page table.inv-detail{margin-bottom:2mm;}
-#print-root .inv-detail-page table.inv-detail thead th{font-size:7pt;padding:0 1.5mm 1mm;}
-#print-root .inv-detail-page table.inv-detail tbody td{font-size:7.2pt;line-height:1.15;padding:.9mm 1.5mm;}
-#print-root .inv-detail-page .inv-detail .inv-total-row td{font-size:7.5pt;padding-top:1.2mm;}
-#print-root .inv-detail-page .inv-p1-foot{bottom:5mm;left:14mm;right:14mm;}
 #print-root .inv-topbar{height:5mm;background:linear-gradient(90deg,#1a2744 0%,#2c3e63 100%);}
 #print-root .inv-inner{padding:15mm 17mm 24mm;}
 #print-root .inv-sans{font-family:'Hiragino Kaku Gothic ProN','Hiragino Sans','Meiryo',sans-serif;}
@@ -2232,6 +2201,38 @@ const PRINT_CSS=`
 #print-root .inv-page thead{display:table-header-group;}
 #print-root .inv-night-tag{display:inline-block;font-size:6.5pt;color:#5b46c9;border:0.5pt solid #b9aef0;border-radius:2mm;padding:0.2mm 1.6mm;margin-left:1mm;vertical-align:middle;}
 #print-root .inv-bold{font-weight:700;color:#1a2744;}
+/* A4専用の密度調整は共通テーブル規則より後ろに置く。同一specificityの上書きを防ぐ。 */
+#print-root .inv-detail-page,
+#print-root .inv-pay-slip-page{height:297mm;min-height:297mm;overflow:hidden;}
+/* 支払明細は1日1行なので、31日＋合計行までA4 1枚で読める密度にする。 */
+#print-root .inv-pay-slip-page .inv-topbar{height:4mm;}
+#print-root .inv-pay-slip-page .inv-inner{padding:9mm 12mm 15mm;}
+#print-root .inv-pay-slip-page .inv-p1-top{margin-bottom:4mm;}
+#print-root .inv-pay-slip-page .inv-p1-title{font-size:22pt;letter-spacing:8px;}
+#print-root .inv-pay-slip-page .inv-title-en{font-size:6.5pt;margin-top:1mm;}
+#print-root .inv-pay-slip-page .inv-p1-meta{font-size:7.5pt;line-height:1.55;}
+#print-root .inv-pay-slip-page .inv-parties{margin-bottom:4mm;}
+#print-root .inv-pay-slip-page .inv-client-name{font-size:12pt;padding-bottom:1.5mm;}
+#print-root .inv-pay-slip-page .inv-p1-issuer{min-height:16mm;}
+#print-root .inv-pay-slip-page .inv-amount-row{padding:3mm 1mm;margin-bottom:4mm;}
+#print-root .inv-pay-slip-page .inv-total-amount{font-size:21pt;}
+#print-root .inv-pay-slip-page .inv-subject{font-size:8pt;margin-bottom:3mm;}
+#print-root .inv-pay-slip-page table.inv-pay-slip-detail{margin-bottom:2mm;}
+#print-root .inv-pay-slip-page table.inv-pay-slip-detail thead th{font-size:7pt;padding:0 1.5mm 1mm;}
+#print-root .inv-pay-slip-page table.inv-pay-slip-detail tbody td{font-size:7.2pt;line-height:1.15;padding:.85mm 1.5mm;}
+#print-root .inv-pay-slip-page .inv-detail .inv-total-row td{font-size:7.5pt;padding-top:1.2mm;}
+#print-root .inv-pay-slip-page .inv-p1-foot{bottom:5mm;left:12mm;right:12mm;}
+#print-root .inv-detail-page .inv-topbar{height:4mm;}
+#print-root .inv-detail-page .inv-inner{padding:9mm 14mm 15mm;}
+#print-root .inv-detail-page .inv-p2-title{font-size:13pt;margin-bottom:1mm;}
+#print-root .inv-detail-page .inv-p2-sub{margin-bottom:3.5mm;padding-bottom:1.5mm;}
+#print-root .inv-detail-page .inv-emp-block{margin-bottom:3mm;}
+#print-root .inv-detail-page .inv-emp-block-title{margin-bottom:1.5mm;}
+#print-root .inv-detail-page table.inv-detail{margin-bottom:2mm;}
+#print-root .inv-detail-page table.inv-detail thead th{font-size:7pt;padding:0 1.5mm 1mm;}
+#print-root .inv-detail-page table.inv-detail tbody td{font-size:7.2pt;line-height:1.15;padding:.9mm 1.5mm;}
+#print-root .inv-detail-page .inv-detail .inv-total-row td{font-size:7.5pt;padding-top:1.2mm;}
+#print-root .inv-detail-page .inv-p1-foot{bottom:5mm;left:14mm;right:14mm;}
 @page{size:A4;margin:0;}
 `;
 
