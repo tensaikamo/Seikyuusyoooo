@@ -295,6 +295,39 @@ async function adminView(env, id) {
     <pre>${esc(rec.report)}</pre>`);
 }
 
+/* レポート内の金額再計算もアプリ本体と同じ前提にする。 */
+function reportNum(v, max) {
+  const n = Number(v);
+  if (!Number.isFinite(n) || n < 0) return 0;
+  return max != null && n > max ? max : n;
+}
+function reportWorkHours(settings) {
+  const h = Number(settings && settings.workHours);
+  return Number.isFinite(h) && h > 0 && h <= 24 ? h : 8;
+}
+function reportRatesOn(emp, date) {
+  const h = emp && Array.isArray(emp.wageHistory) ? emp.wageHistory : null;
+  if (!h || !h.length) return emp || {};
+  let best = null;
+  h.forEach(w => { if (w && w.from <= date && (!best || w.from > best.from)) best = w; });
+  if (best) return best;
+  return h.filter(Boolean).reduce((a, b) => a.from < b.from ? a : b, {});
+}
+function reportDailyTotal(r, emp, settings) {
+  const rate = reportRatesOn(emp, String(r && r.date || '9999-12-31'));
+  const day = reportNum(rate && rate.dailyWage, 1000000);
+  const night = reportNum(rate && rate.nightWage, 1000000);
+  const a = reportNum(r && r.attendance, 3), na = reportNum(r && r.nightAttendance, 3);
+  const oh = a > 0 ? reportNum(r && r.overtimeHours, 24) : 0;
+  const nh = na > 0 ? reportNum(r && r.nightOvertimeHours, 24) : 0;
+  const tr = Math.round(reportNum(r && r.transportFee, 100000));
+  const H = reportWorkHours(settings);
+  const auto = Math.round(day * a) + Math.round(day / H * 1.25 * oh)
+    + Math.round(night * na) + Math.round(night / H * 1.25 * nh) + tr;
+  const manual = reportNum(r && r.manualTotal, 10000000);
+  return { a, na, oh, nh, tr, total: manual > 0 ? Math.round(manual) : auto };
+}
+
 /* 実データを人が読める形で出す。JSONを落として開かなくても様子が分かるように */
 async function adminData(env, id) {
   const raw = await env.REPORTS.get('r:' + id);
@@ -307,8 +340,10 @@ async function adminData(env, id) {
   const emps = Array.isArray(d.employees) ? d.employees : [];
   const recs = canonicalRecords(d.records);
   const byId = new Map(emps.map(e => [e.id, e]));
+  const s = d.settings || {};
 
-  // 月ごとに、誰が何日出て請求がいくらになったかをまとめる
+  // 月ごとに、誰が何日出て請求がいくらになったかをまとめる。
+  // 単価履歴と所定労働時間も本体と同じ条件で再現する。
   const months = new Map();
   recs.forEach(r => {
     const ym = String(r.date || '').slice(0, 7);
@@ -318,21 +353,12 @@ async function adminData(env, id) {
     const e = byId.get(r.employeeId);
     const nm = e ? e.name : '（削除済み）';
     const cur = per.get(nm) || { att: 0, ot: 0, tr: 0, total: 0 };
-    const day = Number(e && e.dailyWage) || 0, night = Number(e && e.nightWage) || 0;
-    const a = Number(r.attendance) || 0, na = Number(r.nightAttendance) || 0;
-    const oh = a > 0 ? (Number(r.overtimeHours) || 0) : 0;
-    const nh = na > 0 ? (Number(r.nightOvertimeHours) || 0) : 0;
-    const tr = Number(r.transportFee) || 0;
-    const man = Number(r.manualTotal) || 0;
-    const auto = Math.round(day * a) + Math.round(day / 8 * 1.25 * oh)
-      + Math.round(night * na) + Math.round(night / 8 * 1.25 * nh) + Math.round(tr);
-    cur.att += a + na; cur.ot += oh + nh; cur.tr += tr;
-    cur.total += man > 0 ? Math.round(man) : auto;
+    const t = reportDailyTotal(r, e, s);
+    cur.att += t.a + t.na; cur.ot += t.oh + t.nh; cur.tr += t.tr;
+    cur.total += t.total;
     per.set(nm, cur);
   });
   const ms = [...months.keys()].sort().reverse().slice(0, 12);
-
-  const s = d.settings || {};
   const iss = s.issuer || {}, cli = s.client || {}, bank = s.bank || {};
 
   return html(`${STYLE}

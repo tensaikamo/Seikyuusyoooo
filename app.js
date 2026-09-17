@@ -219,9 +219,10 @@ const MIN_HOURLY=1075;       // 時給換算の目安（北海道・2025年10月
 function wageLooksSane(label,wage){
   if(wage>WAGE_SANE_MAX)
     return confirm(`${label}が ${yen(wage)} になっています。\n桁を間違えていませんか？\n\nこのままでよければOKを押してください。`);
-  const hourly=Math.round(wage/8);
+  const H=workHours();
+  const hourly=Math.round(wage/H);
   if(hourly<MIN_HOURLY)
-    return confirm(`${label} ${yen(wage)} は、8時間で割ると時給 ${yen(hourly)} です。\n`+
+    return confirm(`${label} ${yen(wage)} は、${H}時間で割ると時給 ${yen(hourly)} です。\n`+
       `最低賃金（目安 ${yen(MIN_HOURLY)}）を下回っている可能性があります。\n\nこのままでよければOKを押してください。`);
   return true;
 }
@@ -1520,7 +1521,13 @@ function bulkFill(mode){
       let rec=recordForDay(selEmp,ds);
       if(!rec){rec={id:uid(),employeeId:selEmp,date:ds,attendance:0,overtimeHours:0,nightAttendance:0,nightOvertimeHours:0,transportFee:0};STATE.records.push(rec);}
       if((rec.attendance||0)===0){
-        rec.attendance=1;n++;
+        const applyDefaultTransport=shouldApplyDefaultTransport(rec,'attendance',1);
+        rec.attendance=1;
+        if(applyDefaultTransport){
+          const def=safeNum(STATE.settings.defaultTransportFee,INPUT_MAX.transportFee);
+          if(def>0)rec.transportFee=def;
+        }
+        n++;
         if(jpHoliday(d.getFullYear(),d.getMonth()+1,d.getDate()))nHol++;
       }
     });
@@ -1851,13 +1858,12 @@ function issueFileName(o){
   return `${d}_${Math.round(o.total)}_${cli}`;
 }
 
-/* 角印風の印影を会社名から組む。発行の瞬間に「ポン」と押される演出に使う。
-   （次回の電子印鑑機能でも同じ描画を流用できる形にしてある） */
+/* 請求書の押印位置。会社名入りの自動印影は作らない。 */
 function buildSeal(){
-  // 会社名を印影として自動生成しない。紙/PDFには実際の判子を押すための空欄だけ残す。
+  // 実際の判子を押す位置だけ示す。会社名は印影として自動描画しない。
   return `<svg class="seal" viewBox="0 0 100 100" aria-label="押印欄">
-    <rect x="4" y="4" width="92" height="92" rx="5" fill="rgba(255,255,255,.22)"
-      stroke="#b8bec8" stroke-width="2" stroke-dasharray="7 5"/>
+    <rect x="3" y="3" width="94" height="94" rx="5" fill="rgba(255,255,255,.35)" stroke="#c0392b" stroke-width="5"/>
+    <rect x="9.5" y="9.5" width="81" height="81" rx="3" fill="none" stroke="#c0392b" stroke-width="1.4"/>
   </svg>`;
 }
 /* 発行の瞬間に角印を押す */
@@ -1871,7 +1877,7 @@ function stampSeal(){
   if(old)old.remove();
   const wrap=document.createElement('div');
   wrap.className='seal-wrap';
-  wrap.innerHTML=buildSeal(name);
+  wrap.innerHTML=buildSeal();
   page.style.position='relative';
   page.appendChild(wrap);
   haptic();
@@ -1982,8 +1988,8 @@ function buildInvoiceHTML(reports,period,batch,cssMode,opt){
   const total=subtotal+tax;
 
   const issuer=s.issuer,client=s.client,bank=s.bank;
-  // 画面用の角印アニメーションとは別に、印刷/PDF側へも同じ印影を埋め込む。
-  const printSeal=(cssMode==='print'&&issuer.companyName)?`<div class="inv-doc-seal">${buildSeal(issuer.companyName)}</div>`:'';
+  // 印刷/PDF側にも同じ押印欄を置く。会社名は中へ描画しない。
+  const printSeal=(cssMode==='print'&&issuer.companyName)?`<div class="inv-doc-seal">${buildSeal()}</div>`:'';
 
   // ---- 1ページ目 ----
   const empRows=reports.map(r=>{
@@ -2007,10 +2013,9 @@ function buildInvoiceHTML(reports,period,batch,cssMode,opt){
     </div>`:'';
 
   // ---- 出面内訳のシートを先に組み立てる（総ページ数の確定に必要）----
-  // A4 1枚に安全に収まる明細行数。これを超える分は自動でページを分けるので、
-  // 行が用紙の境目で分断されたりページ番号がずれたりしない
-  // 実測でA4 1枚に収まるのは25行。最終シートは「合計」行が1行増えるので23行を上限にする
-  const ROWS_PER_SHEET=23;
+  // 1人の月次出面をA4 1枚にするため、日勤と夜勤が同日にあっても1日1行へ集約する。
+  // 請求期間は最大31日なので、通常は1人につき31行＋合計行で1枚に収まる。
+  const ROWS_PER_SHEET=31;
   const detailSheets=[];
   reports.forEach(({emp,rep})=>{
     const rowList=[];
@@ -2020,25 +2025,18 @@ function buildInvoiceHTML(reports,period,batch,cssMode,opt){
       const t=dailyTotal(rec,emp);
       const d=new Date(ds+'T00:00:00');
       const dateLbl=`${d.getMonth()+1}/${d.getDate()}(${WEEK[d.getDay()]})`;
-      // 手入力で上書きした日は1行にまとめて表示
       if(t.overridden){
         rowList.push(`<tr><td class="inv-l">${dateLbl}</td><td class="inv-c">手動</td><td class="inv-c">—</td><td>${yen(t.total)}</td><td>—</td><td>—</td><td class="inv-bold">${yen(t.total)}</td></tr>`);
         return;
       }
-      const hasDay=(rec.attendance||0)>0||(rec.overtimeHours||0)>0;
-      const hasNight=(rec.nightAttendance||0)>0||(rec.nightOvertimeHours||0)>0;
-      const carOnDay=hasDay; // 車代は当日1回だけ
-      if(hasDay){
-        const dtl=t.wage+t.ot+(carOnDay?t.tr:0);
-        rowList.push(`<tr><td class="inv-l">${dateLbl}</td><td class="inv-c">日勤</td><td class="inv-c">${rec.attendance||0}</td><td>${yen(t.wage)}</td><td>${yen(t.ot)}</td><td>${carOnDay?yen(t.tr):'—'}</td><td class="inv-bold">${yen(dtl)}</td></tr>`);
-      }
-      if(hasNight){
-        const ntl=t.nwage+t.not+(!carOnDay?t.tr:0);
-        rowList.push(`<tr><td class="inv-l">${hasDay?'':dateLbl}</td><td class="inv-c"><span class="inv-night-tag">夜勤</span></td><td class="inv-c">${rec.nightAttendance||0}</td><td>${yen(t.nwage)}</td><td>${yen(t.not)}</td><td>${!carOnDay?yen(t.tr):'—'}</td><td class="inv-bold">${yen(ntl)}</td></tr>`);
-      }
-      if(!hasDay&&!hasNight&&(rec.transportFee||0)>0){
-        rowList.push(`<tr><td class="inv-l">${dateLbl}</td><td class="inv-c">—</td><td class="inv-c">0</td><td>¥0</td><td>¥0</td><td>${yen(t.tr)}</td><td class="inv-bold">${yen(t.tr)}</td></tr>`);
-      }
+      const att=safeNum(rec.attendance,INPUT_MAX.attendance);
+      const natt=safeNum(rec.nightAttendance,INPUT_MAX.nightAttendance);
+      const hasDay=att>0,hasNight=natt>0;
+      if(!hasDay&&!hasNight&&t.tr<=0)return;
+      const kind=[hasDay?'日勤':'',hasNight?'夜勤':''].filter(Boolean).join('・')||'—';
+      const wage=t.wage+t.nwage;
+      const ot=t.ot+t.not;
+      rowList.push(`<tr><td class="inv-l">${dateLbl}</td><td class="inv-c">${kind}</td><td class="inv-c">${att+natt||0}</td><td>${yen(wage)}</td><td>${yen(ot)}</td><td>${yen(t.tr)}</td><td class="inv-bold">${yen(t.autoTotal)}</td></tr>`);
     });
     const chunks=[];
     for(let i=0;i<rowList.length;i+=ROWS_PER_SHEET)chunks.push(rowList.slice(i,i+ROWS_PER_SHEET));
@@ -2172,6 +2170,17 @@ const PRINT_CSS=`
 #print-root .inv-pay-slip-page table.inv-pay-slip-detail tbody td{font-size:7.2pt;line-height:1.15;padding:.85mm 1.5mm;}
 #print-root .inv-pay-slip-page .inv-detail .inv-total-row td{font-size:7.5pt;padding-top:1.2mm;}
 #print-root .inv-pay-slip-page .inv-p1-foot{bottom:5mm;left:12mm;right:12mm;}
+#print-root .inv-detail-page .inv-topbar{height:4mm;}
+#print-root .inv-detail-page .inv-inner{padding:9mm 14mm 15mm;}
+#print-root .inv-detail-page .inv-p2-title{font-size:13pt;margin-bottom:1mm;}
+#print-root .inv-detail-page .inv-p2-sub{margin-bottom:3.5mm;padding-bottom:1.5mm;}
+#print-root .inv-detail-page .inv-emp-block{margin-bottom:3mm;}
+#print-root .inv-detail-page .inv-emp-block-title{margin-bottom:1.5mm;}
+#print-root .inv-detail-page table.inv-detail{margin-bottom:2mm;}
+#print-root .inv-detail-page table.inv-detail thead th{font-size:7pt;padding:0 1.5mm 1mm;}
+#print-root .inv-detail-page table.inv-detail tbody td{font-size:7.2pt;line-height:1.15;padding:.9mm 1.5mm;}
+#print-root .inv-detail-page .inv-detail .inv-total-row td{font-size:7.5pt;padding-top:1.2mm;}
+#print-root .inv-detail-page .inv-p1-foot{bottom:5mm;left:14mm;right:14mm;}
 #print-root .inv-topbar{height:5mm;background:linear-gradient(90deg,#1a2744 0%,#2c3e63 100%);}
 #print-root .inv-inner{padding:15mm 17mm 24mm;}
 #print-root .inv-sans{font-family:'Hiragino Kaku Gothic ProN','Hiragino Sans','Meiryo',sans-serif;}
