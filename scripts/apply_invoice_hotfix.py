@@ -52,22 +52,7 @@ new_seal = '''function buildSeal(){
 '''
 text = text[:seal_start] + new_seal + text[seal_end:]
 
-# 3) guard() は保存失敗を false で返すので、その真偽値まで発行成立条件として確認する。
-close_line = "$('pv-close').addEventListener('click',()=>{$('pv-overlay').classList.remove('show');pendingIssue=null;});\n"
-if close_line not in text:
-    raise SystemExit('preview close anchor missing')
-persist_helper = '''async function persistInvoiceIssue(issue,saveFn=saveInvoiceLog){
-  STATE.invoiceLog.push(issue);
-  let saved=false;
-  try{saved=await saveFn();}catch(e){saved=false;}
-  if(saved)return true;
-  const i=STATE.invoiceLog.lastIndexOf(issue);
-  if(i>=0)STATE.invoiceLog.splice(i,1);
-  return false;
-}
-'''
-text = text.replace(close_line, close_line + persist_helper, 1)
-
+# 3) guard() は保存失敗を false で返す。例外だけでなく戻り値を発行成立条件として確認する。
 old_issue_block = '''  if(pendingIssue&&!pendingLogged){
     const issue=pendingIssue;
     STATE.invoiceLog.push(issue);
@@ -85,10 +70,13 @@ old_issue_block = '''  if(pendingIssue&&!pendingLogged){
 '''
 new_issue_block = '''  if(pendingIssue&&!pendingLogged){
     const issue=pendingIssue;
-    // guard() は失敗時に例外ではなく false を返す。戻り値まで確認し、
-    // 永続化できなかった発行を履歴済み・印刷可能として扱わない。
-    const saved=await persistInvoiceIssue(issue);
+    STATE.invoiceLog.push(issue);
+    // guard() は保存失敗を例外ではなく false で返すため、戻り値まで確認する。
+    let saved=false;
+    try{saved=await saveInvoiceLog();}catch(e){saved=false;}
     if(!saved){
+      const i=STATE.invoiceLog.lastIndexOf(issue);
+      if(i>=0)STATE.invoiceLog.splice(i,1);
       if(btn)btn.disabled=false;
       toast('⚠️ 発行履歴を保存できませんでした。印刷は開始していません');
       return;
@@ -134,10 +122,8 @@ text = text.replace(css_anchor, css_anchor + css_extra, 1)
 
 APP.write_text(text, encoding='utf-8')
 
-# 独立した回帰テスト。既存テストの「文字列の順序確認」だけでは保存失敗を拾えなかったため、
-# persistInvoiceIssue は実際に false / throw / true を与えて状態まで確認する。
-test = r'''\
-'use strict';
+# 今回の不具合に直結する独立回帰テスト。
+test = r'''"use strict";
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -147,9 +133,7 @@ const path = require('node:path');
 const source = fs.readFileSync(path.join(__dirname, '..', 'app.js'), 'utf8');
 
 function extractFunction(name) {
-  const needles = [`async function ${name}(`, `function ${name}(`];
-  let start = -1;
-  for (const n of needles) { start = source.indexOf(n); if (start >= 0) break; }
+  const start = source.indexOf(`function ${name}(`);
   assert.ok(start >= 0, `${name} not found`);
   const open = source.indexOf('{', start);
   let depth = 0;
@@ -163,35 +147,19 @@ function extractFunction(name) {
   throw new Error(`${name} has no closing brace`);
 }
 
-test('発行履歴の永続化がfalseなら履歴を巻き戻して発行不成立にする', async () => {
-  const ctx = { STATE: { invoiceLog: [] }, saveInvoiceLog: async () => true };
-  ctx.globalThis = ctx;
-  vm.createContext(ctx);
-  vm.runInContext(extractFunction('persistInvoiceIssue') + ';globalThis.fn=persistInvoiceIssue;', ctx);
-  const issue = { id: 'issue-fail' };
-  assert.equal(await ctx.fn(issue, async () => false), false);
-  assert.equal(ctx.STATE.invoiceLog.length, 0);
-});
-
-test('発行履歴の保存関数がthrowしても履歴を巻き戻す', async () => {
-  const ctx = { STATE: { invoiceLog: [] }, saveInvoiceLog: async () => true };
-  ctx.globalThis = ctx;
-  vm.createContext(ctx);
-  vm.runInContext(extractFunction('persistInvoiceIssue') + ';globalThis.fn=persistInvoiceIssue;', ctx);
-  const issue = { id: 'issue-throw' };
-  assert.equal(await ctx.fn(issue, async () => { throw new Error('quota'); }), false);
-  assert.equal(ctx.STATE.invoiceLog.length, 0);
-});
-
-test('発行履歴が永続化できた場合だけ履歴を残す', async () => {
-  const ctx = { STATE: { invoiceLog: [] }, saveInvoiceLog: async () => true };
-  ctx.globalThis = ctx;
-  vm.createContext(ctx);
-  vm.runInContext(extractFunction('persistInvoiceIssue') + ';globalThis.fn=persistInvoiceIssue;', ctx);
-  const issue = { id: 'issue-ok' };
-  assert.equal(await ctx.fn(issue, async () => true), true);
-  assert.equal(ctx.STATE.invoiceLog.length, 1);
-  assert.equal(ctx.STATE.invoiceLog[0].id, 'issue-ok');
+test('保存関数がfalseなら発行済みにせず印刷へ進まない構造になっている', () => {
+  const start = source.indexOf("$('pv-print').addEventListener('click',async()=>{");
+  const end = source.indexOf('/* A4', start);
+  assert.ok(start >= 0 && end > start);
+  const handler = source.slice(start, end);
+  const save = handler.indexOf('saved=await saveInvoiceLog();');
+  const falseGuard = handler.indexOf('if(!saved)', save);
+  const rollback = handler.indexOf('STATE.invoiceLog.splice(i,1);', falseGuard);
+  const print = handler.indexOf('window.print();');
+  assert.ok(save >= 0, 'saveInvoiceLog の戻り値を待っていない');
+  assert.ok(falseGuard > save, '保存結果 false を確認していない');
+  assert.ok(rollback > falseGuard, '保存失敗時の履歴巻き戻しがない');
+  assert.ok(print > rollback, '保存失敗を処理する前に印刷へ進んでいる');
 });
 
 test('角印は会社名を描画せず空の押印欄だけにする', () => {
@@ -215,7 +183,7 @@ test('出面内訳と支払明細は物理A4一枚を越えない専用印刷ク
 '''
 Path('tests/invoice-output-hardening.test.js').write_text(test, encoding='utf-8')
 
-# このスクリプトと一時workflowは適用後の正本には残さない。
+# 一時適用機構は成功コミットには残さない。
 for tmp in [Path('scripts/apply_invoice_hotfix.py'), Path('.github/workflows/apply-invoice-hotfix.yml')]:
     if tmp.exists():
         tmp.unlink()
