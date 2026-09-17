@@ -1,0 +1,22 @@
+name: Verify invoice hardening
+
+on:
+  push:
+    branches:
+      - agent/invoice-a4-seal-save-hardening
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Syntax check
+        run: node --check app.js && node --check server/worker.js
+      - name: Full Node test suite
+        run: node --test tests/*.test.js
